@@ -2,6 +2,9 @@
 
 import Link from "next/link";
 import JSZip from "jszip";
+import { FiAlertTriangle } from "react-icons/fi";
+import { LuLogIn, LuSearch, LuShoppingCart } from "react-icons/lu";
+import { createPortal } from "react-dom";
 import { useEffect, useRef, useState } from "react";
 
 const initialForm = {
@@ -37,6 +40,7 @@ const SAMPLE_PRESETS = [
     id: "login",
     label: "Login Flow",
     description: "Sign-in & validation",
+    icon: LuLogIn,
     targetUrl: "https://example.com/login",
     userStory:
       "As a registered user, I want to sign in securely so I can access my account.\n\nAcceptance criteria:\n• Enter a valid email and password\n• Submit the login form\n• Show a success state or welcome message\n• Show a clear error for invalid credentials",
@@ -45,6 +49,7 @@ const SAMPLE_PRESETS = [
     id: "checkout",
     label: "Checkout Validation",
     description: "Cart & purchase",
+    icon: LuShoppingCart,
     targetUrl: "https://example.com/checkout",
     userStory:
       "As a shopper, I want to complete checkout so I can purchase the items in my cart.\n\nAcceptance criteria:\n• Review the cart contents and total\n• Enter required shipping and payment details\n• Submit the order\n• Show an order confirmation with an order number",
@@ -53,6 +58,7 @@ const SAMPLE_PRESETS = [
     id: "search",
     label: "Search Filter",
     description: "Query & results",
+    icon: LuSearch,
     targetUrl: "https://example.com/products",
     userStory:
       "As a customer, I want to search and filter products so I can find relevant items quickly.\n\nAcceptance criteria:\n• Enter a search term and submit it\n• Only matching products appear in the results\n• Apply at least one filter and update the results\n• Show an empty state when no products match",
@@ -124,6 +130,8 @@ export default function Home() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedScript, setGeneratedScript] = useState("");
   const [generatedOptions, setGeneratedOptions] = useState(null);
+  const [pendingPreset, setPendingPreset] = useState(null);
+  const [pendingAction, setPendingAction] = useState(null);
   const [copyMessage, setCopyMessage] = useState("");
   const [isCopied, setIsCopied] = useState(false);
   const [activePreset, setActivePreset] = useState("");
@@ -132,6 +140,8 @@ export default function Home() {
   const [commandCopyStatus, setCommandCopyStatus] = useState("");
   const copyTimeoutRef = useRef(null);
   const commandCopyTimeoutRef = useRef(null);
+  const presetModalRef = useRef(null);
+  const presetCancelRef = useRef(null);
 
   useEffect(
     () => () => {
@@ -145,6 +155,74 @@ export default function Home() {
     [],
   );
 
+  useEffect(() => {
+    if (!generatedScript) {
+      return;
+    }
+
+    function warnBeforeLeaving(event) {
+      event.preventDefault();
+      event.returnValue = "";
+    }
+
+    window.addEventListener("beforeunload", warnBeforeLeaving);
+    return () => window.removeEventListener("beforeunload", warnBeforeLeaving);
+  }, [generatedScript]);
+
+  useEffect(() => {
+    if (window.location.search) {
+      window.history.replaceState(
+        window.history.state,
+        "",
+        `${window.location.pathname}${window.location.hash}`,
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!pendingAction) {
+      return;
+    }
+
+    const previousFocus = document.activeElement;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    presetCancelRef.current?.focus();
+
+    function handleModalKeyDown(event) {
+      if (event.key === "Escape") {
+        setPendingAction(null);
+        setPendingPreset(null);
+        return;
+      }
+
+      if (event.key === "Tab") {
+        const buttons =
+          presetModalRef.current?.querySelectorAll("button:not(:disabled)");
+        if (!buttons?.length) {
+          return;
+        }
+
+        const firstButton = buttons[0];
+        const lastButton = buttons[buttons.length - 1];
+        if (event.shiftKey && document.activeElement === firstButton) {
+          event.preventDefault();
+          lastButton.focus();
+        } else if (!event.shiftKey && document.activeElement === lastButton) {
+          event.preventDefault();
+          firstButton.focus();
+        }
+      }
+    }
+
+    document.addEventListener("keydown", handleModalKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", handleModalKeyDown);
+      previousFocus?.focus?.();
+    };
+  }, [pendingAction]);
+
   function handleChange(event) {
     const { name, type, value, checked } = event.target;
     setForm((currentForm) => ({
@@ -155,7 +233,7 @@ export default function Home() {
     setNotice("");
   }
 
-  function handlePreset(preset) {
+  function applyPreset(preset) {
     setForm((currentForm) => ({
       ...currentForm,
       targetUrl: preset.targetUrl,
@@ -167,6 +245,52 @@ export default function Home() {
     setCopyMessage("");
     setIsCopied(false);
     setNotice("");
+  }
+
+  function handlePreset(preset) {
+    if (generatedScript) {
+      setPendingPreset(preset);
+      setPendingAction("preset");
+      return;
+    }
+
+    applyPreset(preset);
+  }
+
+  function clearTestSetup() {
+    setForm({ ...initialForm });
+    setActivePreset("");
+    setGeneratedScript("");
+    setGeneratedOptions(null);
+    setCopyMessage("");
+    setIsCopied(false);
+    setNotice("");
+  }
+
+  function handleReset() {
+    if (generatedScript) {
+      setPendingPreset(null);
+      setPendingAction("reset");
+      return;
+    }
+
+    clearTestSetup();
+  }
+
+  function handleConfirmAction() {
+    if (pendingAction === "reset") {
+      clearTestSetup();
+    } else if (pendingPreset) {
+      applyPreset(pendingPreset);
+    }
+
+    setPendingAction(null);
+    setPendingPreset(null);
+  }
+
+  function handleCancelAction() {
+    setPendingAction(null);
+    setPendingPreset(null);
   }
 
   async function handleSubmit(event) {
@@ -236,7 +360,11 @@ export default function Home() {
         }
 
         const zip = new JSZip();
-        zip.file("pages/TargetPage.js", codeBlocks[0]);
+        const pageObjectPath =
+          outputOptions.framework === "cypress"
+            ? "cypress/support/pages/TargetPage.js"
+            : "pages/TargetPage.js";
+        zip.file(pageObjectPath, codeBlocks[0]);
         const specPath =
           outputOptions.framework === "playwright"
             ? "tests/generated-test.spec.js"
@@ -356,6 +484,7 @@ export default function Home() {
         <div className="preset-list">
           {SAMPLE_PRESETS.map((preset) => {
             const isActive = activePreset === preset.id;
+            const PresetIcon = preset.icon;
             return (
               <button
                 className={`preset-button${isActive ? " preset-button-active" : ""}`}
@@ -364,13 +493,18 @@ export default function Home() {
                 onClick={() => handlePreset(preset)}
                 aria-pressed={isActive}
               >
-                <span className="preset-check" aria-hidden="true">
-                  {isActive ? "✓" : ""}
+                <span className="preset-icon" aria-hidden="true">
+                  <PresetIcon />
                 </span>
                 <span>
                   <strong>{preset.label}</strong>
                   <small>{preset.description}</small>
                 </span>
+                {isActive && (
+                  <span className="preset-active-indicator" aria-hidden="true">
+                    ✓
+                  </span>
+                )}
               </button>
             );
           })}
@@ -382,7 +516,17 @@ export default function Home() {
           <div className="panel-heading">
             <div>
               <span className="step-label">STEP 01</span>
-              <h2>Tell us what to test</h2>
+              <div className="form-heading-title-row">
+                <h2>Tell us what to test</h2>
+                <button
+                  className="reset-button"
+                  type="button"
+                  onClick={handleReset}
+                  aria-label="Reset form and start a new test"
+                >
+                  Reset
+                </button>
+              </div>
             </div>
             <span className="required-note">All fields required</span>
           </div>
@@ -427,30 +571,22 @@ export default function Home() {
 
             <div className="field">
               <label htmlFor="framework">Testing framework</label>
-              <div className="input-wrap select-wrap">
-                <select
-                  id="framework"
-                  name="framework"
-                  value={form.framework}
-                  onChange={handleChange}
-                >
-                  <option value="playwright">Playwright</option>
-                  <option value="cypress">Cypress</option>
-                </select>
-                <svg
-                  aria-hidden="true"
-                  viewBox="0 0 20 20"
-                  fill="none"
-                  className="select-chevron"
-                >
-                  <path
-                    d="m6 8 4 4 4-4"
-                    stroke="currentColor"
-                    strokeWidth="1.7"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
+              <div className="framework-segmented" role="group" aria-label="Testing framework">
+                {["playwright", "cypress"].map((framework) => (
+                  <button
+                    className={`framework-option${form.framework === framework ? " framework-option-active" : ""}`}
+                    type="button"
+                    key={framework}
+                    aria-pressed={form.framework === framework}
+                    onClick={() => {
+                      setForm((currentForm) => ({ ...currentForm, framework }));
+                      setActivePreset("");
+                      setNotice("");
+                    }}
+                  >
+                    {framework === "playwright" ? "Playwright" : "Cypress"}
+                  </button>
+                ))}
               </div>
               <span className="field-hint">
                 Choose the framework for your generated script
@@ -569,11 +705,9 @@ export default function Home() {
                 <span />
                 <span />
                 <div className="window-filename">
-                  {generatedOptions?.usePom
-                    ? "Page Object + test spec"
-                    : generatedOptions?.framework === "cypress"
-                      ? "generated-test.cy.js"
-                      : "generated-test.spec.js"}
+                  {(generatedOptions?.framework ?? form.framework) === "cypress"
+                    ? "generated-test.cy.js"
+                    : "generated-test.spec.js"}
                 </div>
               </div>
               {isGenerating ? (
@@ -663,8 +797,17 @@ export default function Home() {
                     </button>
                     </div>
                   </div>
-                  <pre className="generated-code">
-                    <code>{generatedScript}</code>
+                  <pre className="generated-code" aria-label="Generated JavaScript">
+                    <code>
+                      {generatedScript.split("\n").map((line, index) => (
+                        <span className="code-line" key={index}>
+                          <span className="code-line-number" aria-hidden="true">
+                            {index + 1}
+                          </span>
+                          <span className="code-line-content">{line || " "}</span>
+                        </span>
+                      ))}
+                    </code>
                   </pre>
                 </>
               ) : (
@@ -782,9 +925,20 @@ export default function Home() {
 
               {(generatedOptions?.usePom ?? form.usePom) && (
                 <p className="execution-pom-tip">
-                  <strong>POM tip:</strong> Save the Page Object class inside a{" "}
-                  <code>pages/</code> folder, then import it into your spec
-                  file.
+                  {executionGuideTab === "cypress" ? (
+                    <>
+                      <strong>POM tip:</strong> Save the Page Object class as{" "}
+                      <code>cypress/support/pages/TargetPage.js</code> and the
+                      test spec as{" "}
+                      <code>cypress/e2e/generated-test.cy.js</code>.
+                    </>
+                  ) : (
+                    <>
+                      <strong>POM tip:</strong> Save the Page Object class as{" "}
+                      <code>pages/TargetPage.js</code> and the test spec as{" "}
+                      <code>tests/generated-test.spec.js</code>.
+                    </>
+                  )}
                 </p>
               )}
 
@@ -859,6 +1013,152 @@ export default function Home() {
         <span>Built for better testing.</span>
         <span>Describe it. Test it.</span>
       </footer>
+
+      {pendingAction &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            className="preset-modal-overlay"
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 99999,
+              backgroundColor: "rgba(9, 9, 11, 0.6)",
+              backdropFilter: "blur(4px)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: "16px",
+            }}
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) {
+                handleCancelAction();
+              }
+            }}
+          >
+            <div
+              className="preset-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="preset-modal-title"
+              aria-describedby="preset-modal-description"
+              ref={presetModalRef}
+              style={{
+                backgroundColor: "#ffffff",
+                color: "#18181b",
+                width: "100%",
+                maxWidth: "440px",
+                borderRadius: "16px",
+                padding: "24px",
+                border: "1px solid #e4e4e7",
+                boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.25)",
+              }}
+            >
+              <div
+                className="preset-modal-heading"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "12px",
+                }}
+              >
+                <span
+                  className="preset-modal-icon"
+                  aria-hidden="true"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: "40px",
+                    height: "40px",
+                    backgroundColor: "#fef3c7",
+                    color: "#d97706",
+                    borderRadius: "10px",
+                    flexShrink: 0,
+                  }}
+                >
+                  <FiAlertTriangle size={20} />
+                </span>
+                <h2
+                  id="preset-modal-title"
+                  style={{
+                    margin: 0,
+                    color: "#18181b",
+                    fontSize: "19px",
+                    fontWeight: 700,
+                    letterSpacing: "-0.45px",
+                    lineHeight: 1.3,
+                  }}
+                >
+                  {pendingAction === "reset"
+                    ? "Reset current test setup?"
+                    : "Replace current test setup?"}
+                </h2>
+              </div>
+              <p
+                id="preset-modal-description"
+                style={{
+                  margin: "18px 0 0",
+                  color: "#52525b",
+                  fontSize: "14px",
+                  lineHeight: 1.65,
+                }}
+              >
+                {pendingAction === "reset"
+                  ? "Resetting will clear your current form inputs and generated test script from the editor. Make sure you have copied or downloaded your code first."
+                  : "Loading this preset will overwrite your current form inputs and clear the generated test script in the editor. Make sure you have copied or downloaded your code first."}
+              </p>
+              <div
+                className="preset-modal-actions"
+                style={{
+                  display: "flex",
+                  justifyContent: "flex-end",
+                  gap: "12px",
+                  marginTop: "24px",
+                }}
+              >
+                <button
+                  className="preset-modal-cancel"
+                  type="button"
+                  ref={presetCancelRef}
+                  onClick={handleCancelAction}
+                  style={{
+                    padding: "10px 16px",
+                    borderRadius: "10px",
+                    border: "1px solid #d4d4d8",
+                    backgroundColor: "#ffffff",
+                    color: "#3f3f46",
+                    fontWeight: 600,
+                    fontSize: "14px",
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="preset-modal-confirm"
+                  type="button"
+                  onClick={handleConfirmAction}
+                  style={{
+                    padding: "10px 16px",
+                    borderRadius: "10px",
+                    border: "none",
+                    backgroundColor: "#09090b",
+                    color: "#ffffff",
+                    fontWeight: 600,
+                    fontSize: "14px",
+                    cursor: "pointer",
+                  }}
+                >
+                  {pendingAction === "reset"
+                    ? "Reset & Clear"
+                    : "Continue & Replace"}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
     </main>
   );
 }
