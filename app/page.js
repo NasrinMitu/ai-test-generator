@@ -614,23 +614,26 @@ export default function Home() {
       if (!Array.isArray(result.scenarios)) {
         throw new Error("The server returned an invalid test scenario list.");
       }
+      let safeTestData = result.testData;
+      if (typeof safeTestData === "string") {
+        try {
+          safeTestData = JSON.parse(safeTestData);
+        } catch {
+          safeTestData = null;
+        }
+      }
+
       if (
         form.useFixtures &&
-        (!result.testData ||
-          typeof result.testData !== "object" ||
-          Array.isArray(result.testData) ||
-          !result.testData.validInputs ||
-          typeof result.testData.validInputs !== "object" ||
-          Array.isArray(result.testData.validInputs) ||
-          !result.testData.invalidInputs ||
-          typeof result.testData.invalidInputs !== "object" ||
-          Array.isArray(result.testData.invalidInputs) ||
-          !Array.isArray(result.testData.boundaryCases) ||
-          !result.testData.mockApiResponses ||
-          typeof result.testData.mockApiResponses !== "object" ||
-          Array.isArray(result.testData.mockApiResponses))
+        (!safeTestData ||
+          typeof safeTestData !== "object" ||
+          Array.isArray(safeTestData))
       ) {
-        throw new Error("The server returned invalid test fixture data.");
+        safeTestData = {
+          validInputs: {},
+          invalidInputs: {},
+          boundaryCases: {},
+        };
       }
 
       const codeBlock = rawScript.match(
@@ -659,14 +662,14 @@ export default function Home() {
         pageObjectCode: responsePageObjectCode,
         specCode: responseSpecCode,
         scenarios: result.scenarios,
-        testData: form.useFixtures ? result.testData : null,
+        testData: form.useFixtures ? safeTestData : null,
       };
       setGeneratedScript(script);
       setPageObjectCode(responsePageObjectCode);
       setSpecCode(responseSpecCode);
       setPomFile("spec");
       setScenarios(result.scenarios);
-      setGeneratedTestData(form.useFixtures ? result.testData : null);
+      setGeneratedTestData(form.useFixtures ? safeTestData : null);
       setGeneratedOptions({
         framework: form.framework,
         usePom: form.usePom,
@@ -941,6 +944,14 @@ export default function Home() {
           <span className="status-dot" />
           AI test workspace
         </div>
+        <Link
+          className="docs-nav-link"
+          href="/docs"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Learn
+        </Link>
         <button
           className="history-trigger"
           type="button"
@@ -1108,64 +1119,79 @@ export default function Home() {
               </span>
             </div>
 
-            <label className="pom-toggle" htmlFor="usePom">
-              <input
-                id="usePom"
-                name="usePom"
-                type="checkbox"
-                checked={form.usePom}
-                onChange={handleChange}
-              />
-              <span className="pom-toggle-track" aria-hidden="true">
-                <span className="pom-toggle-thumb" />
-              </span>
-              <span className="pom-toggle-copy">
-                <strong>Use Page Object Model (POM)</strong>
-                <small>
-                  Separates locators &amp; page actions from test assertions
-                </small>
-              </span>
-            </label>
+            <div className="toggle-help-row">
+              <label className="pom-toggle" htmlFor="usePom">
+                <input
+                  id="usePom"
+                  name="usePom"
+                  type="checkbox"
+                  checked={form.usePom}
+                  onChange={handleChange}
+                />
+                <span className="pom-toggle-track" aria-hidden="true">
+                  <span className="pom-toggle-thumb" />
+                </span>
+                <span className="pom-toggle-copy">
+                  <strong>Use Page Object Model (POM)</strong>
+                  <small>
+                    Separates locators &amp; page actions from test assertions
+                  </small>
+                </span>
+              </label>
+              <Link className="toggle-learn-link" href="/docs#pom" target="_blank" rel="noreferrer">
+                Learn more
+              </Link>
+            </div>
 
-            <label className="pom-toggle" htmlFor="useFixtures">
-              <input
-                id="useFixtures"
-                name="useFixtures"
-                type="checkbox"
-                checked={form.useFixtures}
-                onChange={handleChange}
-              />
-              <span className="pom-toggle-track" aria-hidden="true">
-                <span className="pom-toggle-thumb" />
-              </span>
-              <span className="pom-toggle-copy">
-                <strong>Generate Test Fixtures (testData.json)</strong>
-                <small>
-                  Creates valid, invalid, and boundary payloads imported by your test spec
-                </small>
-              </span>
-            </label>
+            <div className="toggle-help-row">
+              <label className="pom-toggle" htmlFor="useFixtures">
+                <input
+                  id="useFixtures"
+                  name="useFixtures"
+                  type="checkbox"
+                  checked={form.useFixtures}
+                  onChange={handleChange}
+                />
+                <span className="pom-toggle-track" aria-hidden="true">
+                  <span className="pom-toggle-thumb" />
+                </span>
+                <span className="pom-toggle-copy">
+                  <strong>Generate Test Fixtures (testData.json)</strong>
+                  <small>
+                    Creates valid, invalid, and boundary payloads imported by your test spec
+                  </small>
+                </span>
+              </label>
+              <Link className="toggle-learn-link" href="/docs#fixtures" target="_blank" rel="noreferrer">
+                Learn more
+              </Link>
+            </div>
 
-            <label className="pom-toggle" htmlFor="includeCiWorkflow">
-              <input
-                id="includeCiWorkflow"
-                name="includeCiWorkflow"
-                type="checkbox"
-                checked={form.includeCiWorkflow}
-                onChange={handleChange}
-              />
-              <span className="pom-toggle-track" aria-hidden="true">
-                <span className="pom-toggle-thumb" />
-              </span>
-              <span className="pom-toggle-copy">
-                <strong>
-                  Include GitHub Actions CI (.github/workflows/e2e.yml)
-                </strong>
-                <small>
-                  Bundles a headless CI pipeline workflow pre-configured for your chosen framework
-                </small>
-              </span>
-            </label>
+            <div className="toggle-help-row">
+              <label className="pom-toggle" htmlFor="includeCiWorkflow">
+                <input
+                  id="includeCiWorkflow"
+                  name="includeCiWorkflow"
+                  type="checkbox"
+                  checked={form.includeCiWorkflow}
+                  onChange={handleChange}
+                />
+                <span className="pom-toggle-track" aria-hidden="true">
+                  <span className="pom-toggle-thumb" />
+                </span>
+                <span className="pom-toggle-copy">
+                  <strong>
+                    Include GitHub Actions CI (.github/workflows/e2e.yml)
+                  </strong>
+                  <small>
+                    Bundles a headless CI pipeline workflow pre-configured for your chosen framework
+                  </small>
+                </span>
+              </label>
+              <Link className="toggle-learn-link" href="/docs#ci" target="_blank" rel="noreferrer">
+                Learn more
+              </Link>
+            </div>
 
             <div className="field story-field">
               <label htmlFor="userStory">User story &amp; acceptance criteria</label>
