@@ -20,6 +20,7 @@ const initialForm = {
   useFixtures: false,
   includeCiWorkflow: false,
   userStory: "",
+  domSnippet: "",
 };
 
 const EXECUTION_GUIDES = {
@@ -52,6 +53,14 @@ const SAMPLE_PRESETS = [
     targetUrl: "https://example.com/login",
     userStory:
       "As a registered user, I want to sign in securely so I can access my account.\n\nAcceptance criteria:\n• Enter a valid email and password\n• Submit the login form\n• Show a success state or welcome message\n• Show a clear error for invalid credentials",
+    domSnippet: `<form aria-label="Sign in" data-testid="login-form">
+  <label for="email">Email address</label>
+  <input id="email" name="email" type="email" autocomplete="username" placeholder="you@example.com" />
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" />
+  <button type="submit">Sign in</button>
+  <p role="alert" data-testid="login-error"></p>
+</form>`,
   },
   {
     id: "checkout",
@@ -61,6 +70,19 @@ const SAMPLE_PRESETS = [
     targetUrl: "https://example.com/checkout",
     userStory:
       "As a shopper, I want to complete checkout so I can purchase the items in my cart.\n\nAcceptance criteria:\n• Review the cart contents and total\n• Enter required shipping and payment details\n• Submit the order\n• Show an order confirmation with an order number",
+    domSnippet: `<main data-testid="checkout-page">
+  <h1>Checkout</h1>
+  <form aria-label="Shipping details">
+    <label for="full-name">Full name</label>
+    <input id="full-name" name="fullName" autocomplete="name" />
+    <label for="address">Street address</label>
+    <input id="address" name="address" autocomplete="street-address" />
+    <button type="submit">Continue to payment</button>
+  </form>
+  <section aria-label="Order summary">
+    <p>Total: <span data-testid="order-total">$49.99</span></p>
+  </section>
+</main>`,
   },
   {
     id: "search",
@@ -70,6 +92,20 @@ const SAMPLE_PRESETS = [
     targetUrl: "https://example.com/products",
     userStory:
       "As a customer, I want to search and filter products so I can find relevant items quickly.\n\nAcceptance criteria:\n• Enter a search term and submit it\n• Only matching products appear in the results\n• Apply at least one filter and update the results\n• Show an empty state when no products match",
+    domSnippet: `<main>
+  <h1>Products</h1>
+  <form role="search">
+    <label for="product-search">Search products</label>
+    <input id="product-search" name="query" type="search" placeholder="Search products" data-testid="product-search" />
+    <button type="submit">Search</button>
+  </form>
+  <label for="category-filter">Category</label>
+  <select id="category-filter" name="category">
+    <option value="">All categories</option>
+    <option value="home">Home</option>
+  </select>
+  <ul data-testid="product-results"></ul>
+</main>`,
   },
 ];
 
@@ -280,6 +316,8 @@ export default function Home() {
                   ["playwright", "cypress"].includes(item.framework) &&
                   typeof item.targetUrl === "string" &&
                   typeof item.userStory === "string" &&
+                  (item.domSnippet === undefined ||
+                    typeof item.domSnippet === "string") &&
                   typeof item.usePom === "boolean" &&
                   (item.useFixtures === undefined ||
                     typeof item.useFixtures === "boolean") &&
@@ -402,6 +440,7 @@ export default function Home() {
       ...currentForm,
       targetUrl: preset.targetUrl,
       userStory: preset.userStory,
+      domSnippet: preset.domSnippet,
     }));
     setActivePreset(preset.id);
     setGeneratedScript("");
@@ -469,6 +508,7 @@ export default function Home() {
       useFixtures: session.useFixtures ?? false,
       includeCiWorkflow: session.includeCiWorkflow ?? false,
       userStory: session.userStory,
+      domSnippet: session.domSnippet ?? "",
     });
     setGeneratedScript(toPlainScriptString(session.script));
     setScenarios(session.scenarios);
@@ -587,6 +627,7 @@ export default function Home() {
         useFixtures: form.useFixtures,
         includeCiWorkflow: form.includeCiWorkflow,
         userStory: form.userStory,
+        domSnippet: form.domSnippet,
         script,
         scenarios: result.scenarios,
         testData: form.useFixtures ? result.testData : null,
@@ -638,12 +679,9 @@ export default function Home() {
           zip.file(pageObjectPath, codeBlocks[0]);
           zip.file(specPath, codeBlocks[1]);
         } else if (outputOptions.usePom) {
-          const starterPageObject =
-            outputOptions.framework === "playwright"
-              ? "export default class TargetPage {\n  constructor(page) {\n    this.page = page;\n  }\n}\n"
-              : "export default class TargetPage {}\n";
-          zip.file(pageObjectPath, starterPageObject);
-          zip.file(specPath, codeBlocks[0] ?? "");
+          throw new Error(
+            "The generated POM suite is incomplete. It must include separate TargetPage and test spec code blocks. Please generate the suite again.",
+          );
         } else {
           if (!codeBlocks[0]) {
             throw new Error("The generated response did not contain JavaScript code.");
@@ -929,12 +967,12 @@ export default function Home() {
                 </button>
               </div>
             </div>
-            <span className="required-note">All fields required</span>
+            <span className="required-note">URL optional; story and HTML required</span>
           </div>
 
           <div className="form-fields">
             <div className="field">
-              <label htmlFor="targetUrl">Target URL</label>
+              <label htmlFor="targetUrl">Target URL (Optional)</label>
               <div className="input-wrap">
                 <svg
                   aria-hidden="true"
@@ -959,15 +997,40 @@ export default function Home() {
                   id="targetUrl"
                   name="targetUrl"
                   type="url"
-                  placeholder="https://yourwebsite.com"
+                  placeholder="https://example.com/checkout"
                   value={form.targetUrl}
                   onChange={handleChange}
-                  required
                 />
               </div>
               <span className="field-hint">
-                The website you want to run tests against
+                Leave blank to use the root path with your DOM snippet
               </span>
+            </div>
+
+            <div className="field dom-snippet-field">
+              <label htmlFor="domSnippet">Page HTML / DOM Snippet</label>
+              <textarea
+                id="domSnippet"
+                name="domSnippet"
+                className="dom-snippet-textarea"
+                placeholder="<main>Paste the relevant page or form HTML here...</main>"
+                value={form.domSnippet}
+                onChange={handleChange}
+                required
+                rows={5}
+                spellCheck={false}
+              />
+              <span className="field-hint">
+                Inspect the page (DevTools → Right-click form/container → Copy → Copy outerHTML) and paste it here for 100% accurate selectors.
+              </span>
+              <details className="html-copy-tip">
+                <summary>How to copy HTML?</summary>
+                <span>
+                  Open DevTools, select the form or relevant container in the
+                  Elements panel, right-click it, then choose Copy → Copy
+                  outerHTML.
+                </span>
+              </details>
             </div>
 
             <div className="field">

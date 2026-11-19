@@ -2633,6 +2633,32 @@ body {
   }
 }
 
+.dom-snippet-textarea {
+  min-height: 132px;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 12px !important;
+  line-height: 1.55;
+}
+
+.html-copy-tip {
+  color: #52525b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.html-copy-tip summary {
+  width: fit-content;
+  color: #047857;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.html-copy-tip span {
+  display: block;
+  margin-top: 6px;
+  color: #71717a;
+}
+
 @media (max-width: 640px) {
   .topbar-note {
     display: none;
