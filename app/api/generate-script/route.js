@@ -52,8 +52,8 @@ export async function POST(request) {
 
     const pomInstructions = usePom
       ? framework === "cypress"
-        ? `When usePom is true, return "pageObjectCode" and "specCode" as separate JSON string fields. "pageObjectCode" must contain only raw JavaScript (no Markdown fences) defining "export default class TargetPage" for cypress/support/pages/TargetPage.js and encapsulating all DOM locators and page actions. "specCode" must contain only raw JavaScript for cypress/e2e/generated-test.cy.js and import TargetPage from '../support/pages/TargetPage'. Call Page Object methods from the Cypress tests. Keep all DOM selectors and interactions inside TargetPage methods; it() blocks must contain zero raw cy.get(), cy.contains(), or other DOM selectors.`
-        : `When usePom is true, return "pageObjectCode" and "specCode" as separate JSON string fields. "pageObjectCode" must contain only raw JavaScript (no Markdown fences) defining "export class TargetPage" for pages/TargetPage.js and encapsulating all DOM locators and page actions. "specCode" must contain only raw JavaScript for tests/generated-test.spec.js and import { TargetPage } from '../pages/TargetPage'. Call Page Object methods from the Playwright tests. Keep all DOM selectors and interactions inside TargetPage methods; test() blocks must contain zero raw page.locator() selectors.`
+        ? `When usePom is true, return "pageObjectCode" and "specCode" as separate JSON string fields. "pageObjectCode" must contain only raw JavaScript (no Markdown fences) defining "export default class TargetPage" for cypress/support/pages/TargetPage.js and encapsulating all DOM locators and page actions. Include reusable methods such as visit(), fillShippingDetails(), selectPaymentMethod(), and submitOrder() when applicable to the supplied DOM and story. "specCode" must contain only raw JavaScript for cypress/e2e/generated-test.cy.js and import TargetPage from '../support/pages/TargetPage'. Call Page Object methods from the Cypress tests. Keep all DOM selectors and interactions inside TargetPage methods; it() blocks must contain zero raw cy.get(), cy.contains(), or other DOM selectors.`
+        : `When usePom is true, return "pageObjectCode" and "specCode" as separate JSON string fields. "pageObjectCode" must contain only raw JavaScript (no Markdown fences) defining "export class TargetPage" for pages/TargetPage.js and encapsulating all DOM locators and page actions. Include reusable methods such as visit(), fillShippingDetails(), selectPaymentMethod(), and submitOrder() when applicable to the supplied DOM and story. "specCode" must contain only raw JavaScript for tests/generated-test.spec.js and import { TargetPage } from '../pages/TargetPage'. Call Page Object methods from the Playwright tests. Keep all DOM selectors and interactions inside TargetPage methods; test() blocks must contain zero raw page.locator() selectors.`
       : `When usePom is false, return "pageObjectCode" as an empty string and put the complete raw JavaScript test spec in "specCode", without Markdown fences.`;
 
     const fixtureInstructions = useFixtures
@@ -94,6 +94,14 @@ ${frameworkInstructions}
 - Scan the DOM snippet for required fields whose visible label or associated trigger text includes an asterisk (*), especially custom dropdowns rendered as buttons (for example, "City / District*") and required select elements. Never skip these fields. Add a Page Object helper that opens each custom dropdown using its actual accessible trigger (for example, Playwright page.getByRole('button', { name: /City \\/ District/i }) or Cypress cy.contains('button', /City \\/ District/i)), then selects a valid option using only options/text confirmed by the DOM snippet. Handle native select fields with the framework's native select interaction.
 - Every test() or it() block must finish with at least one meaningful assertion: use expect(...) in Playwright or a Cypress .should(...) assertion. This applies to positive submissions and negative validation cases; do not leave any test without an assertion.
 - Check the DOM snippet for duplicate data-testid values before using them. When multiple elements share a value (such as payment method cards), disambiguate by visible text using Playwright locator.filter({ hasText: '...' }) or Cypress cy.contains('[data-testid=\"...\"]', '...'), with text that identifies the intended element.
+- The specCode MUST implement five complete test() / it() cases named TC-01 through TC-05. Cover every user-story requirement and relevant controls in the DOM; do not shorten the suite or omit required actions:
+  - TC-01 Happy Path End-to-End: fill every required field, including required custom dropdowns; select a payment method when present; call the Page Object's submitOrder() method; assert a post-submit state change such as a confirmation element or navigation away from the initial form. Never pass by merely asserting the initial /checkout URL or matching the checkout form's starting URL.
+  - TC-02 Required Field Validation: submit the empty form and assert aria-invalid="true" on required fields, a visible validation error, or that submission leaves the page on the form. Never use toBeVisible() on an input that was already visible before submission as the validation assertion.
+  - TC-03 Invalid Format Validation: use testData.invalidInputs.invalidEmail and testData.invalidInputs.invalidPhone for fields present in the DOM; assert aria-invalid="true", a visible validation error, or that invalid submission leaves the page on the form. Never use toBeVisible() on an input that was already visible before submission as the validation assertion.
+  - TC-04 Payment / Interactive UI: test switching payment methods when available; otherwise exercise an actual interactive control present in the DOM such as notes or coupons. Assert the selected/active state using an appropriate checked, aria-checked, or active-class assertion; visibility alone is not sufficient.
+  - TC-05 Boundary Inputs: use testData.boundaryCases for maximum-length customer notes, special characters, or other relevant boundary data and assert the resulting behavior.
+Adapt tests to the actual DOM and story without inventing fields or controls. If a listed interaction is absent, use another real interaction or boundary case from the supplied DOM/story while still implementing five complete cases with meaningful assertions.
+- When fixtures are enabled, make test cases data-driven using the applicable values in testData.validInputs, testData.invalidInputs, and testData.boundaryCases. boundaryCases must be a key-value object (not an array), with useful named keys such as maxNotes and specialChars, so tests can access values as testData.boundaryCases.<key>. Populate values only for fields present in the DOM snippet; include cityDistrict only when the page has a city/district field. Include invalidEmail and invalidPhone when the corresponding fields exist, and use emptyRequired for required-field validation.
 - Always navigate to the complete Target URL:
 ${navigationInstruction}
 - Use auto-waiting web-first assertions; avoid hard-coded sleeps or waitForTimeout.
@@ -116,7 +124,7 @@ Return a JSON object with exactly these keys:
     }.
 - "testData": ${
       useFixtures
-        ? 'a nested JSON object (not a stringified JSON string) containing realistic "validInputs" and "invalidInputs" objects, a "boundaryCases" array, and a "mockApiResponses" object tailored to the user story and target URL.'
+        ? 'a nested JSON object (not a stringified JSON string) with "validInputs" and "invalidInputs" values tailored to fields actually present in the DOM snippet (include "cityDistrict" only if a city/district field exists), a non-empty "boundaryCases" key-value object (not an array) with named keys such as "maxNotes" and "specialChars" and values relevant to maximum-length customerNotes or special characters, and a "mockApiResponses" object tailored to the user story and target URL. Include invalidEmail and invalidPhone only when those input fields exist; provide an emptyRequired value suitable for the required fields in the snippet.'
         : "null"
     }.
 
@@ -131,51 +139,40 @@ Do not include Markdown fences around the JSON response itself.`;
           contents: prompt,
           config: {
             temperature: 0.2,
+            maxOutputTokens: 8192,
             responseMimeType: "application/json",
-            // Gemini 3.x models use thinkingLevel instead of thinkingBudget: 0
             thinkingConfig: {
-              thinkingLevel: usePom ? "LOW" : "MINIMAL",
+              thinkingLevel: "MINIMAL",
             },
           },
         });
 
         if (response.text) {
           const parsed = JSON.parse(response.text);
-          if (
-            !Array.isArray(parsed.scenarios) ||
-            parsed.scenarios.length < 4 ||
-            parsed.scenarios.length > 6 ||
-            parsed.scenarios.some(
-              (scenario) =>
-                !scenario ||
-                typeof scenario.id !== "string" ||
-                !["Positive", "Negative", "Edge Case"].includes(scenario.type) ||
-                typeof scenario.title !== "string" ||
-                typeof scenario.expectedResult !== "string",
-            )
-          ) {
-            throw new Error("Gemini returned an invalid test script or scenario list.");
+          const rawSpecCode =
+            typeof parsed.specCode === "string" && parsed.specCode.trim()
+              ? parsed.specCode.trim()
+              : typeof parsed.script === "string" && parsed.script.trim()
+                ? parsed.script.trim()
+                : "";
+          if (!rawSpecCode) {
+            throw new Error("Gemini returned an empty test script.");
           }
+
+          const scenarios = Array.isArray(parsed.scenarios)
+            ? parsed.scenarios
+            : parsed.scenarios
+              ? [parsed.scenarios]
+              : [];
 
           const pageObjectCode =
             usePom && typeof parsed.pageObjectCode === "string"
               ? parsed.pageObjectCode.trim()
               : "";
-          const specCode =
-            typeof parsed.specCode === "string"
-              ? parsed.specCode.trim()
-              : !usePom && typeof parsed.script === "string"
-                ? parsed.script.trim()
-                : "";
-          if (!usePom && !specCode && typeof parsed.script !== "string") {
-            throw new Error("Gemini returned an invalid test script.");
-          }
-          const script =
-            usePom && pageObjectCode
-              ? `\`\`\`javascript\n// TargetPage.js\n${pageObjectCode}\n\`\`\`\n\n\`\`\`javascript\n// ${framework === "cypress" ? "generated-test.cy.js" : "generated-test.spec.js"}\n${specCode}\n\`\`\``
-              : typeof parsed.script === "string"
-                ? parsed.script
-                : specCode;
+          const specCode = rawSpecCode;
+          const script = usePom
+            ? `\`\`\`javascript\n// TargetPage.js\n${pageObjectCode}\n\`\`\`\n\n\`\`\`javascript\n// ${framework === "cypress" ? "generated-test.cy.js" : "generated-test.spec.js"}\n${specCode}\n\`\`\``
+            : rawSpecCode;
 
           let testData = parsed.testData;
           if (useFixtures) {
@@ -187,36 +184,49 @@ Do not include Markdown fences around the JSON response itself.`;
               }
             }
 
-            if (!isPlainObject(testData)) {
-              testData = {
-                validInputs: {},
-                invalidInputs: {},
-                boundaryCases: [],
-                mockApiResponses: {},
-              };
-            } else {
-              testData = {
-                validInputs: isPlainObject(testData.validInputs)
-                  ? testData.validInputs
-                  : {},
-                invalidInputs: isPlainObject(testData.invalidInputs)
-                  ? testData.invalidInputs
-                  : {},
-                boundaryCases: Array.isArray(testData.boundaryCases)
-                  ? testData.boundaryCases
-                  : [],
-                mockApiResponses: isPlainObject(testData.mockApiResponses)
-                  ? testData.mockApiResponses
-                  : {},
-              };
-            }
+            const generatedTestData = isPlainObject(testData) ? testData : {};
+            const generatedValidInputs = isPlainObject(
+              generatedTestData.validInputs,
+            )
+              ? generatedTestData.validInputs
+              : {};
+            const generatedInvalidInputs = isPlainObject(
+              generatedTestData.invalidInputs,
+            )
+              ? generatedTestData.invalidInputs
+              : {};
+
+            testData = {
+              validInputs: {
+                ...generatedValidInputs,
+              },
+              invalidInputs: {
+                invalidEmail: "invalid-email-format",
+                invalidPhone: "123",
+                emptyRequired: "",
+                ...generatedInvalidInputs,
+              },
+              boundaryCases:
+                isPlainObject(generatedTestData.boundaryCases) &&
+                Object.keys(generatedTestData.boundaryCases).length > 0
+                  ? generatedTestData.boundaryCases
+                  : {
+                      maxNotes: "A".repeat(500),
+                      specialChars: "<script>alert(1)</script>",
+                    },
+              mockApiResponses: isPlainObject(
+                generatedTestData.mockApiResponses,
+              )
+                ? generatedTestData.mockApiResponses
+                : {},
+            };
           }
 
           return Response.json({
             script,
             pageObjectCode,
             specCode,
-            scenarios: parsed.scenarios,
+            scenarios,
             testData: useFixtures ? testData : null,
           });
         }
