@@ -136,13 +136,34 @@ export default function DocsPage() {
     <main className="docs-page">
       <header className="docs-topbar">
         <Link className="brand" href="/" aria-label="Testcraft home">
-          <span className="brand-mark" aria-hidden="true">
-            &lt;/&gt;
+          <span className="brand-mark">
+            <svg
+              aria-hidden="true"
+              width="28"
+              height="28"
+              viewBox="0 0 28 28"
+              fill="none"
+            >
+              <path
+                d="M10 6 4 14l6 8M18 6l6 8-6 8"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path
+                d="m10.5 14.5 3 3 5.5-6"
+                stroke="#10B981"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
           </span>
           <span>testcraft</span>
         </Link>
-        <Link className="docs-back-link" href="/">
-          Back to workspace
+        <Link className="docs-back-link" href="/" rel="noopener noreferrer">
+          &larr; Back to Workspace
         </Link>
       </header>
 

@@ -948,9 +948,9 @@ export default function Home() {
           className="docs-nav-link"
           href="/docs"
           target="_blank"
-          rel="noreferrer"
+          rel="noopener noreferrer"
         >
-          Learn
+          Docs
         </Link>
         <button
           className="history-trigger"
