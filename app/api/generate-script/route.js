@@ -8,6 +8,15 @@ const MODELS = [
   "gemini-3.8-flash",
 ];
 
+function isPlainObject(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
 export async function POST(request) {
   try {
     const { targetUrl, framework, userStory, usePom, useFixtures } =
@@ -52,7 +61,7 @@ Return a JSON object with exactly these keys:
 - "script": the complete generated ${framework} test script as a string, including the requested JavaScript markdown code block(s)${usePom ? " in the Page Object Model structure" : ""}.
 - "testData": ${
       useFixtures
-        ? 'an object containing realistic "validInputs", "invalidInputs", "boundaryCases", and "mockApiResponses" tailored to the user story and target URL. Use arrays for each category, with meaningful JSON values that can be used by the generated test.'
+        ? 'a nested JSON object (not a stringified JSON string) containing realistic "validInputs" and "invalidInputs" objects, a "boundaryCases" array, and a "mockApiResponses" object tailored to the user story and target URL.'
         : "null"
     }.
 
@@ -94,22 +103,45 @@ Do not include Markdown fences around the JSON response itself.`;
             throw new Error("Gemini returned an invalid test script or scenario list.");
           }
 
-          if (
-            useFixtures &&
-            (!parsed.testData ||
-              typeof parsed.testData !== "object" ||
-              Array.isArray(parsed.testData) ||
-              !["validInputs", "invalidInputs", "boundaryCases", "mockApiResponses"].every(
-                (key) => Array.isArray(parsed.testData[key]),
-              ))
-          ) {
-            throw new Error("Gemini returned invalid fixture data.");
+          let testData = parsed.testData;
+          if (useFixtures) {
+            if (typeof testData === "string") {
+              try {
+                testData = JSON.parse(testData);
+              } catch {
+                testData = null;
+              }
+            }
+
+            if (!isPlainObject(testData)) {
+              testData = {
+                validInputs: {},
+                invalidInputs: {},
+                boundaryCases: [],
+                mockApiResponses: {},
+              };
+            } else {
+              testData = {
+                validInputs: isPlainObject(testData.validInputs)
+                  ? testData.validInputs
+                  : {},
+                invalidInputs: isPlainObject(testData.invalidInputs)
+                  ? testData.invalidInputs
+                  : {},
+                boundaryCases: Array.isArray(testData.boundaryCases)
+                  ? testData.boundaryCases
+                  : [],
+                mockApiResponses: isPlainObject(testData.mockApiResponses)
+                  ? testData.mockApiResponses
+                  : {},
+              };
+            }
           }
 
           return Response.json({
             script: parsed.script,
             scenarios: parsed.scenarios,
-            testData: useFixtures ? parsed.testData : null,
+            testData: useFixtures ? testData : null,
           });
         }
       } catch (err) {

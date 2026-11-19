@@ -18,6 +18,7 @@ const initialForm = {
   framework: "playwright",
   usePom: false,
   useFixtures: false,
+  includeCiWorkflow: false,
   userStory: "",
 };
 
@@ -112,6 +113,78 @@ function extractCodeBlocks(rawText) {
   }
 
   return [text.trim()];
+}
+
+function getCiWorkflowYaml(framework) {
+  if (framework === "cypress") {
+    return `name: Cypress E2E Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run Cypress tests
+        run: npx cypress run --headless
+      - name: Upload Cypress screenshots and videos
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cypress-artifacts
+          path: |
+            cypress/screenshots/
+            cypress/videos/
+          if-no-files-found: ignore
+`;
+  }
+
+  return `name: Playwright E2E Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+      - name: Run Playwright tests
+        run: npx playwright test
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          if-no-files-found: ignore
+`;
 }
 
 function getRelativeTime(timestamp) {
@@ -210,13 +283,22 @@ export default function Home() {
                   typeof item.usePom === "boolean" &&
                   (item.useFixtures === undefined ||
                     typeof item.useFixtures === "boolean") &&
+                  (item.includeCiWorkflow === undefined ||
+                    typeof item.includeCiWorkflow === "boolean") &&
                   (item.useFixtures !== true ||
                     (item.testData &&
                       typeof item.testData === "object" &&
                       !Array.isArray(item.testData) &&
-                      ["validInputs", "invalidInputs", "boundaryCases", "mockApiResponses"].every(
-                        (key) => Array.isArray(item.testData[key]),
-                      ))) &&
+                      item.testData.validInputs &&
+                      typeof item.testData.validInputs === "object" &&
+                      !Array.isArray(item.testData.validInputs) &&
+                      item.testData.invalidInputs &&
+                      typeof item.testData.invalidInputs === "object" &&
+                      !Array.isArray(item.testData.invalidInputs) &&
+                      Array.isArray(item.testData.boundaryCases) &&
+                      item.testData.mockApiResponses &&
+                      typeof item.testData.mockApiResponses === "object" &&
+                      !Array.isArray(item.testData.mockApiResponses))) &&
                   Array.isArray(item.scenarios) &&
                   item.scenarios.every(
                     (scenario) =>
@@ -385,6 +467,7 @@ export default function Home() {
       framework: session.framework,
       usePom: session.usePom,
       useFixtures: session.useFixtures ?? false,
+      includeCiWorkflow: session.includeCiWorkflow ?? false,
       userStory: session.userStory,
     });
     setGeneratedScript(toPlainScriptString(session.script));
@@ -394,6 +477,7 @@ export default function Home() {
       framework: session.framework,
       usePom: session.usePom,
       useFixtures: session.useFixtures ?? false,
+      includeCiWorkflow: session.includeCiWorkflow ?? false,
     });
     setActivePreset("");
     setCopyMessage("");
@@ -476,9 +560,16 @@ export default function Home() {
         (!result.testData ||
           typeof result.testData !== "object" ||
           Array.isArray(result.testData) ||
-          !["validInputs", "invalidInputs", "boundaryCases", "mockApiResponses"].every(
-            (key) => Array.isArray(result.testData[key]),
-          ))
+          !result.testData.validInputs ||
+          typeof result.testData.validInputs !== "object" ||
+          Array.isArray(result.testData.validInputs) ||
+          !result.testData.invalidInputs ||
+          typeof result.testData.invalidInputs !== "object" ||
+          Array.isArray(result.testData.invalidInputs) ||
+          !Array.isArray(result.testData.boundaryCases) ||
+          !result.testData.mockApiResponses ||
+          typeof result.testData.mockApiResponses !== "object" ||
+          Array.isArray(result.testData.mockApiResponses))
       ) {
         throw new Error("The server returned invalid test fixture data.");
       }
@@ -494,6 +585,7 @@ export default function Home() {
         framework: form.framework,
         usePom: form.usePom,
         useFixtures: form.useFixtures,
+        includeCiWorkflow: form.includeCiWorkflow,
         userStory: form.userStory,
         script,
         scenarios: result.scenarios,
@@ -506,6 +598,7 @@ export default function Home() {
         framework: form.framework,
         usePom: form.usePom,
         useFixtures: form.useFixtures,
+        includeCiWorkflow: form.includeCiWorkflow,
       });
       persistHistory([session, ...history].slice(0, 10));
     } catch (error) {
@@ -527,7 +620,11 @@ export default function Home() {
       let blob;
       let fileName;
 
-      if (outputOptions.usePom || outputOptions.useFixtures) {
+      if (
+        outputOptions.usePom ||
+        outputOptions.useFixtures ||
+        outputOptions.includeCiWorkflow
+      ) {
         const zip = new JSZip();
         const pageObjectPath =
           outputOptions.framework === "cypress"
@@ -563,15 +660,25 @@ export default function Home() {
               : "fixtures/testData.json";
           zip.file(fixturePath, JSON.stringify(generatedTestData, null, 2));
         }
+        if (outputOptions.includeCiWorkflow) {
+          zip.file(
+            ".github/workflows/e2e.yml",
+            getCiWorkflowYaml(outputOptions.framework),
+          );
+        }
         blob = await zip.generateAsync({ type: "blob" });
         fileName =
           outputOptions.framework === "playwright"
             ? outputOptions.usePom
               ? "playwright-pom-suite.zip"
-              : "playwright-test-suite.zip"
+              : outputOptions.includeCiWorkflow && !outputOptions.useFixtures
+                ? "playwright-ci-suite.zip"
+                : "playwright-test-suite.zip"
             : outputOptions.usePom
               ? "cypress-pom-suite.zip"
-              : "cypress-test-suite.zip";
+              : outputOptions.includeCiWorkflow && !outputOptions.useFixtures
+                ? "cypress-ci-suite.zip"
+                : "cypress-test-suite.zip";
       } else {
         if (!codeBlocks[0]) {
           throw new Error("The generated response did not contain JavaScript code.");
@@ -670,6 +777,22 @@ export default function Home() {
     }
   }
 
+  async function handleCopyCiWorkflow() {
+    try {
+      await navigator.clipboard.writeText(
+        getCiWorkflowYaml(outputOptions.framework),
+      );
+      setCopyMessage("Workflow copied!");
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = setTimeout(() => setCopyMessage(""), 2500);
+    } catch (error) {
+      console.error("Could not copy GitHub Actions workflow:", error);
+      setCopyMessage("Could not copy workflow. Check browser permissions.");
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = setTimeout(() => setCopyMessage(""), 3500);
+    }
+  }
+
   async function handleCopyCommand(commandId, command) {
     try {
       await navigator.clipboard.writeText(command);
@@ -692,6 +815,8 @@ export default function Home() {
       );
     }
   }
+
+  const outputOptions = generatedOptions ?? form;
 
   return (
     <main className="dashboard">
@@ -907,6 +1032,27 @@ export default function Home() {
               </span>
             </label>
 
+            <label className="pom-toggle" htmlFor="includeCiWorkflow">
+              <input
+                id="includeCiWorkflow"
+                name="includeCiWorkflow"
+                type="checkbox"
+                checked={form.includeCiWorkflow}
+                onChange={handleChange}
+              />
+              <span className="pom-toggle-track" aria-hidden="true">
+                <span className="pom-toggle-thumb" />
+              </span>
+              <span className="pom-toggle-copy">
+                <strong>
+                  Include GitHub Actions CI (.github/workflows/e2e.yml)
+                </strong>
+                <small>
+                  Bundles a headless CI pipeline workflow pre-configured for your chosen framework
+                </small>
+              </span>
+            </label>
+
             <div className="field story-field">
               <label htmlFor="userStory">User story &amp; acceptance criteria</label>
               <textarea
@@ -991,9 +1137,21 @@ export default function Home() {
           <div className="panel-heading preview-heading">
             <div>
               <span className="step-label">STEP 02</span>
-              <h2 id="preview-title">Your test script</h2>
+              <h2 id="preview-title">
+                {outputTab === "ciWorkflow"
+                  ? "GitHub Actions workflow"
+                  : outputTab === "testData"
+                    ? "Test fixtures"
+                    : "Your test script"}
+              </h2>
             </div>
-            <span className="language-badge">JS</span>
+            <span className="language-badge">
+              {outputTab === "ciWorkflow"
+                ? "YAML"
+                : outputTab === "testData"
+                  ? "JSON"
+                  : "JS"}
+            </span>
           </div>
 
           <div className="output-tabs" role="tablist" aria-label="Generated output">
@@ -1031,6 +1189,19 @@ export default function Home() {
                 onClick={() => setOutputTab("testData")}
               >
                 testData.json
+              </button>
+            )}
+            {outputOptions.includeCiWorkflow && generatedScript && (
+              <button
+                className={`output-tab${outputTab === "ciWorkflow" ? " output-tab-active" : ""}`}
+                type="button"
+                role="tab"
+                id="output-tab-ciWorkflow"
+                aria-selected={outputTab === "ciWorkflow"}
+                aria-controls="output-panel-ciWorkflow"
+                onClick={() => setOutputTab("ciWorkflow")}
+              >
+                e2e.yml
               </button>
             )}
           </div>
@@ -1120,7 +1291,9 @@ export default function Home() {
                       onClick={handleDownload}
                       aria-label={
                         ((generatedOptions?.usePom ?? form.usePom) ||
-                          (generatedOptions?.useFixtures ?? form.useFixtures))
+                          (generatedOptions?.useFixtures ?? form.useFixtures) ||
+                          (generatedOptions?.includeCiWorkflow ??
+                            form.includeCiWorkflow))
                           ? "Download test suite as a ZIP file"
                           : `Download generated ${generatedOptions?.framework ?? form.framework} test file`
                       }
@@ -1134,11 +1307,9 @@ export default function Home() {
                           strokeLinejoin="round"
                         />
                       </svg>
-                      {((generatedOptions?.usePom ?? form.usePom) ||
-                        (generatedOptions?.useFixtures ?? form.useFixtures))
+                      {outputOptions.usePom || outputOptions.useFixtures
                         ? "Download .zip Suite"
-                        : (generatedOptions?.framework ?? form.framework) ===
-                            "playwright"
+                        : outputOptions.framework === "playwright"
                           ? "Download .spec.js"
                           : "Download .cy.js"}
                     </button>
@@ -1217,7 +1388,7 @@ export default function Home() {
                   </div>
                 )}
               </section>
-            ) : (
+            ) : outputTab === "testData" ? (
               <div className="code-window">
                 <div className="window-bar" aria-hidden="true">
                   <span />
@@ -1243,6 +1414,45 @@ export default function Home() {
                 <pre className="generated-code" aria-label="Generated test fixture JSON">
                   <code>
                     {JSON.stringify(generatedTestData, null, 2)
+                      .split("\n")
+                      .map((line, index) => (
+                        <span className="code-line" key={index}>
+                          <span className="code-line-number" aria-hidden="true">
+                            {index + 1}
+                          </span>
+                          <span className="code-line-content">{line || " "}</span>
+                        </span>
+                      ))}
+                  </code>
+                </pre>
+              </div>
+            ) : (
+              <div className="code-window">
+                <div className="window-bar" aria-hidden="true">
+                  <span />
+                  <span />
+                  <span />
+                  <div className="window-filename">.github/workflows/e2e.yml</div>
+                </div>
+                <div className="code-toolbar">
+                  <span className="code-toolbar-label">YAML</span>
+                  <div className="code-actions">
+                    <button
+                      className="copy-button"
+                      type="button"
+                      onClick={handleCopyCiWorkflow}
+                      aria-label="Copy GitHub Actions workflow to clipboard"
+                    >
+                      {copyMessage === "Workflow copied!"
+                        ? "Copied!"
+                        : "Copy YAML"}
+                    </button>
+                  </div>
+                </div>
+                <pre className="generated-code" aria-label="GitHub Actions workflow YAML">
+                  <code>
+                    {getCiWorkflowYaml(outputOptions.framework)
+                      .trimEnd()
                       .split("\n")
                       .map((line, index) => (
                         <span className="code-line" key={index}>
