@@ -12,10 +12,9 @@ export async function POST(request) {
   try {
     const { targetUrl, framework, userStory, usePom } = await request.json();
 
-    // Fail fast (12s timeout) instead of waiting 5 minutes on a busy 503 model
     const ai = new GoogleGenAI({
       apiKey: process.env.GEMINI_API_KEY,
-      httpOptions: { timeout: 12000 },
+      httpOptions: { timeout: 25000 },
     });
 
     const pomInstructions = usePom
@@ -93,6 +92,8 @@ Do not include Markdown fences around the JSON response itself.`;
         if (
           err?.status === 503 ||
           err?.status === 429 ||
+          err?.status === 504 ||
+          err?.status === 500 ||
           err?.name === "AbortError" ||
           err?.message?.includes("timeout")
         ) {

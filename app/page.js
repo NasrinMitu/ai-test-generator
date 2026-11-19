@@ -90,10 +90,19 @@ function CodeIcon() {
   );
 }
 
-function extractJavaScriptCodeBlocks(response) {
-  const codeBlocks = [
-    ...response.matchAll(/```(?:javascript|js)\s*\r?\n([\s\S]*?)```/gi),
-  ]
+function toPlainScriptString(script) {
+  if (typeof script === "string") {
+    return script;
+  }
+
+  const serialized = JSON.stringify(script ?? "");
+  return typeof serialized === "string" ? serialized : "";
+}
+
+function extractCodeBlocks(rawText) {
+  const text = toPlainScriptString(rawText);
+  const matches = [...text.matchAll(/```(?:javascript|js|typescript|ts)?\s*([\s\S]*?)```/gi)];
+  const codeBlocks = matches
     .map((match) => match[1].trim())
     .filter(Boolean);
 
@@ -101,13 +110,7 @@ function extractJavaScriptCodeBlocks(response) {
     return codeBlocks;
   }
 
-  const plainCode = response
-    .trim()
-    .replace(/^```(?:javascript|js)?\s*/i, "")
-    .replace(/\s*```$/, "")
-    .trim();
-
-  return plainCode ? [plainCode] : [];
+  return [text.trim()];
 }
 
 function getRelativeTime(timestamp) {
@@ -370,7 +373,7 @@ export default function Home() {
       usePom: session.usePom,
       userStory: session.userStory,
     });
-    setGeneratedScript(session.script);
+    setGeneratedScript(toPlainScriptString(session.script));
     setScenarios(session.scenarios);
     setGeneratedOptions({
       framework: session.framework,
@@ -444,17 +447,18 @@ export default function Home() {
         throw new Error(result.error || "Unable to generate a test script.");
       }
 
-      if (typeof result.script !== "string" || !result.script.trim()) {
+      const rawScript = toPlainScriptString(result.script);
+      if (!rawScript.trim()) {
         throw new Error("The server returned an empty test script.");
       }
       if (!Array.isArray(result.scenarios)) {
         throw new Error("The server returned an invalid test scenario list.");
       }
 
-      const codeBlock = result.script.match(
+      const codeBlock = rawScript.match(
         /^```(?:javascript|js)\s*\n([\s\S]*?)\n```$/i,
       );
-      const script = form.usePom || !codeBlock ? result.script : codeBlock[1];
+      const script = form.usePom || !codeBlock ? rawScript : codeBlock[1];
       const session = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         timestamp: new Date().toISOString(),
@@ -482,30 +486,33 @@ export default function Home() {
 
   async function handleDownload() {
     const outputOptions = generatedOptions ?? form;
-    const codeBlocks = extractJavaScriptCodeBlocks(generatedScript);
+    const codeBlocks = extractCodeBlocks(generatedScript);
 
     try {
       let blob;
       let fileName;
 
       if (outputOptions.usePom) {
-        if (codeBlocks.length < 2) {
-          throw new Error(
-            "The POM response must contain separate Page Object and test spec code blocks.",
-          );
-        }
-
         const zip = new JSZip();
         const pageObjectPath =
           outputOptions.framework === "cypress"
             ? "cypress/support/pages/TargetPage.js"
             : "pages/TargetPage.js";
-        zip.file(pageObjectPath, codeBlocks[0]);
         const specPath =
           outputOptions.framework === "playwright"
             ? "tests/generated-test.spec.js"
             : "cypress/e2e/generated-test.cy.js";
-        zip.file(specPath, codeBlocks[1]);
+        if (codeBlocks.length >= 2) {
+          zip.file(pageObjectPath, codeBlocks[0]);
+          zip.file(specPath, codeBlocks[1]);
+        } else {
+          const starterPageObject =
+            outputOptions.framework === "playwright"
+              ? "export default class TargetPage {\n  constructor(page) {\n    this.page = page;\n  }\n}\n"
+              : "export default class TargetPage {}\n";
+          zip.file(pageObjectPath, starterPageObject);
+          zip.file(specPath, codeBlocks[0] ?? "");
+        }
         blob = await zip.generateAsync({ type: "blob" });
         fileName =
           outputOptions.framework === "playwright"
@@ -532,7 +539,7 @@ export default function Home() {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 100);
       setNotice("");
     } catch (error) {
       setNotice(
@@ -1513,9 +1520,14 @@ export default function Home() {
                   history.map((session) => (
                     <article className="history-entry" key={session.id}>
                       <div className="history-entry-meta">
-                        <span className={`history-framework history-framework-${session.framework}`}>
-                          {session.framework === "playwright" ? "Playwright" : "Cypress"}
-                        </span>
+                        <div className="history-badges">
+                          <span className={`history-framework history-framework-${session.framework}`}>
+                            {session.framework === "playwright" ? "Playwright" : "Cypress"}
+                          </span>
+                          {session.usePom && (
+                            <span className="history-pom-badge">POM</span>
+                          )}
+                        </div>
                         <time dateTime={session.timestamp}>
                           {getRelativeTime(session.timestamp)}
                         </time>
