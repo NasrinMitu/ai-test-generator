@@ -17,6 +17,7 @@ const initialForm = {
   targetUrl: "",
   framework: "playwright",
   usePom: false,
+  useFixtures: false,
   userStory: "",
 };
 
@@ -131,6 +132,7 @@ export default function Home() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedScript, setGeneratedScript] = useState("");
   const [scenarios, setScenarios] = useState([]);
+  const [generatedTestData, setGeneratedTestData] = useState(null);
   const [generatedOptions, setGeneratedOptions] = useState(null);
   const [pendingPreset, setPendingPreset] = useState(null);
   const [pendingHistorySession, setPendingHistorySession] = useState(null);
@@ -206,6 +208,15 @@ export default function Home() {
                   typeof item.targetUrl === "string" &&
                   typeof item.userStory === "string" &&
                   typeof item.usePom === "boolean" &&
+                  (item.useFixtures === undefined ||
+                    typeof item.useFixtures === "boolean") &&
+                  (item.useFixtures !== true ||
+                    (item.testData &&
+                      typeof item.testData === "object" &&
+                      !Array.isArray(item.testData) &&
+                      ["validInputs", "invalidInputs", "boundaryCases", "mockApiResponses"].every(
+                        (key) => Array.isArray(item.testData[key]),
+                      ))) &&
                   Array.isArray(item.scenarios) &&
                   item.scenarios.every(
                     (scenario) =>
@@ -313,6 +324,7 @@ export default function Home() {
     setActivePreset(preset.id);
     setGeneratedScript("");
     setScenarios([]);
+    setGeneratedTestData(null);
     setGeneratedOptions(null);
     setCopyMessage("");
     setIsCopied(false);
@@ -335,6 +347,7 @@ export default function Home() {
     setActivePreset("");
     setGeneratedScript("");
     setScenarios([]);
+    setGeneratedTestData(null);
     setGeneratedOptions(null);
     setCopyMessage("");
     setIsCopied(false);
@@ -371,13 +384,16 @@ export default function Home() {
       targetUrl: session.targetUrl,
       framework: session.framework,
       usePom: session.usePom,
+      useFixtures: session.useFixtures ?? false,
       userStory: session.userStory,
     });
     setGeneratedScript(toPlainScriptString(session.script));
     setScenarios(session.scenarios);
+    setGeneratedTestData(session.testData ?? null);
     setGeneratedOptions({
       framework: session.framework,
       usePom: session.usePom,
+      useFixtures: session.useFixtures ?? false,
     });
     setActivePreset("");
     setCopyMessage("");
@@ -424,6 +440,7 @@ export default function Home() {
     setIsGenerating(true);
     setGeneratedScript("");
     setScenarios([]);
+    setGeneratedTestData(null);
     setGeneratedOptions(null);
     setCopyMessage("");
     setIsCopied(false);
@@ -454,6 +471,17 @@ export default function Home() {
       if (!Array.isArray(result.scenarios)) {
         throw new Error("The server returned an invalid test scenario list.");
       }
+      if (
+        form.useFixtures &&
+        (!result.testData ||
+          typeof result.testData !== "object" ||
+          Array.isArray(result.testData) ||
+          !["validInputs", "invalidInputs", "boundaryCases", "mockApiResponses"].every(
+            (key) => Array.isArray(result.testData[key]),
+          ))
+      ) {
+        throw new Error("The server returned invalid test fixture data.");
+      }
 
       const codeBlock = rawScript.match(
         /^```(?:javascript|js)\s*\n([\s\S]*?)\n```$/i,
@@ -465,13 +493,20 @@ export default function Home() {
         targetUrl: form.targetUrl,
         framework: form.framework,
         usePom: form.usePom,
+        useFixtures: form.useFixtures,
         userStory: form.userStory,
         script,
         scenarios: result.scenarios,
+        testData: form.useFixtures ? result.testData : null,
       };
       setGeneratedScript(script);
       setScenarios(result.scenarios);
-      setGeneratedOptions({ framework: form.framework, usePom: form.usePom });
+      setGeneratedTestData(form.useFixtures ? result.testData : null);
+      setGeneratedOptions({
+        framework: form.framework,
+        usePom: form.usePom,
+        useFixtures: form.useFixtures,
+      });
       persistHistory([session, ...history].slice(0, 10));
     } catch (error) {
       setNotice(
@@ -492,7 +527,7 @@ export default function Home() {
       let blob;
       let fileName;
 
-      if (outputOptions.usePom) {
+      if (outputOptions.usePom || outputOptions.useFixtures) {
         const zip = new JSZip();
         const pageObjectPath =
           outputOptions.framework === "cypress"
@@ -502,22 +537,41 @@ export default function Home() {
           outputOptions.framework === "playwright"
             ? "tests/generated-test.spec.js"
             : "cypress/e2e/generated-test.cy.js";
-        if (codeBlocks.length >= 2) {
+        if (outputOptions.usePom && codeBlocks.length >= 2) {
           zip.file(pageObjectPath, codeBlocks[0]);
           zip.file(specPath, codeBlocks[1]);
-        } else {
+        } else if (outputOptions.usePom) {
           const starterPageObject =
             outputOptions.framework === "playwright"
               ? "export default class TargetPage {\n  constructor(page) {\n    this.page = page;\n  }\n}\n"
               : "export default class TargetPage {}\n";
           zip.file(pageObjectPath, starterPageObject);
           zip.file(specPath, codeBlocks[0] ?? "");
+        } else {
+          if (!codeBlocks[0]) {
+            throw new Error("The generated response did not contain JavaScript code.");
+          }
+          zip.file(specPath, codeBlocks[0]);
+        }
+        if (outputOptions.useFixtures) {
+          if (!generatedTestData) {
+            throw new Error("The generated response did not contain test fixture data.");
+          }
+          const fixturePath =
+            outputOptions.framework === "cypress"
+              ? "cypress/fixtures/testData.json"
+              : "fixtures/testData.json";
+          zip.file(fixturePath, JSON.stringify(generatedTestData, null, 2));
         }
         blob = await zip.generateAsync({ type: "blob" });
         fileName =
           outputOptions.framework === "playwright"
-            ? "playwright-pom-suite.zip"
-            : "cypress-pom-suite.zip";
+            ? outputOptions.usePom
+              ? "playwright-pom-suite.zip"
+              : "playwright-test-suite.zip"
+            : outputOptions.usePom
+              ? "cypress-pom-suite.zip"
+              : "cypress-test-suite.zip";
       } else {
         if (!codeBlocks[0]) {
           throw new Error("The generated response did not contain JavaScript code.");
@@ -595,6 +649,22 @@ export default function Home() {
     } catch (error) {
       console.error("Could not copy test scenarios:", error);
       setCopyMessage("Could not copy scenarios. Check browser permissions.");
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = setTimeout(() => setCopyMessage(""), 3500);
+    }
+  }
+
+  async function handleCopyTestData() {
+    try {
+      await navigator.clipboard.writeText(
+        JSON.stringify(generatedTestData, null, 2),
+      );
+      setCopyMessage("Test data copied!");
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = setTimeout(() => setCopyMessage(""), 2500);
+    } catch (error) {
+      console.error("Could not copy generated test data:", error);
+      setCopyMessage("Could not copy test data. Check browser permissions.");
       if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
       copyTimeoutRef.current = setTimeout(() => setCopyMessage(""), 3500);
     }
@@ -818,6 +888,25 @@ export default function Home() {
               </span>
             </label>
 
+            <label className="pom-toggle" htmlFor="useFixtures">
+              <input
+                id="useFixtures"
+                name="useFixtures"
+                type="checkbox"
+                checked={form.useFixtures}
+                onChange={handleChange}
+              />
+              <span className="pom-toggle-track" aria-hidden="true">
+                <span className="pom-toggle-thumb" />
+              </span>
+              <span className="pom-toggle-copy">
+                <strong>Generate Test Fixtures (testData.json)</strong>
+                <small>
+                  Creates valid, invalid, and boundary payloads imported by your test spec
+                </small>
+              </span>
+            </label>
+
             <div className="field story-field">
               <label htmlFor="userStory">User story &amp; acceptance criteria</label>
               <textarea
@@ -931,6 +1020,19 @@ export default function Home() {
               Test Scenarios
               <span className="output-tab-count">{scenarios.length}</span>
             </button>
+            {generatedTestData && (
+              <button
+                className={`output-tab${outputTab === "testData" ? " output-tab-active" : ""}`}
+                type="button"
+                role="tab"
+                id="output-tab-testData"
+                aria-selected={outputTab === "testData"}
+                aria-controls="output-panel-testData"
+                onClick={() => setOutputTab("testData")}
+              >
+                testData.json
+              </button>
+            )}
           </div>
 
           <div
@@ -1017,8 +1119,9 @@ export default function Home() {
                       type="button"
                       onClick={handleDownload}
                       aria-label={
-                        (generatedOptions?.usePom ?? form.usePom)
-                          ? "Download POM test suite as a ZIP file"
+                        ((generatedOptions?.usePom ?? form.usePom) ||
+                          (generatedOptions?.useFixtures ?? form.useFixtures))
+                          ? "Download test suite as a ZIP file"
                           : `Download generated ${generatedOptions?.framework ?? form.framework} test file`
                       }
                     >
@@ -1031,7 +1134,8 @@ export default function Home() {
                           strokeLinejoin="round"
                         />
                       </svg>
-                      {(generatedOptions?.usePom ?? form.usePom)
+                      {((generatedOptions?.usePom ?? form.usePom) ||
+                        (generatedOptions?.useFixtures ?? form.useFixtures))
                         ? "Download .zip Suite"
                         : (generatedOptions?.framework ?? form.framework) ===
                             "playwright"
@@ -1070,7 +1174,7 @@ export default function Home() {
                 </div>
               )}
             </div>
-            ) : (
+            ) : outputTab === "scenarios" ? (
               <section
                 className="scenarios-panel"
               >
@@ -1113,6 +1217,44 @@ export default function Home() {
                   </div>
                 )}
               </section>
+            ) : (
+              <div className="code-window">
+                <div className="window-bar" aria-hidden="true">
+                  <span />
+                  <span />
+                  <span />
+                  <div className="window-filename">testData.json</div>
+                </div>
+                <div className="code-toolbar">
+                  <span className="code-toolbar-label">JSON</span>
+                  <div className="code-actions">
+                    <button
+                      className="copy-button"
+                      type="button"
+                      onClick={handleCopyTestData}
+                      aria-label="Copy generated test data to clipboard"
+                    >
+                      {copyMessage === "Test data copied!"
+                        ? "Copied!"
+                        : "Copy JSON"}
+                    </button>
+                  </div>
+                </div>
+                <pre className="generated-code" aria-label="Generated test fixture JSON">
+                  <code>
+                    {JSON.stringify(generatedTestData, null, 2)
+                      .split("\n")
+                      .map((line, index) => (
+                        <span className="code-line" key={index}>
+                          <span className="code-line-number" aria-hidden="true">
+                            {index + 1}
+                          </span>
+                          <span className="code-line-content">{line || " "}</span>
+                        </span>
+                      ))}
+                  </code>
+                </pre>
+              </div>
             )}
           </div>
 

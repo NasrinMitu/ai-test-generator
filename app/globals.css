@@ -2207,6 +2207,7 @@ body {
 .output-tabs {
   display: inline-flex;
   width: fit-content;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   padding: 4px;

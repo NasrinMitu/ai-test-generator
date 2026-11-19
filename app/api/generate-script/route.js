@@ -10,7 +10,8 @@ const MODELS = [
 
 export async function POST(request) {
   try {
-    const { targetUrl, framework, userStory, usePom } = await request.json();
+    const { targetUrl, framework, userStory, usePom, useFixtures } =
+      await request.json();
 
     const ai = new GoogleGenAI({
       apiKey: process.env.GEMINI_API_KEY,
@@ -27,6 +28,12 @@ export async function POST(request) {
 2. Second block: Test spec for tests/generated-test.spec.js importing TargetPage from '../pages/TargetPage' and running assertions.`
       : `Return only a single, complete test script inside a JavaScript markdown code block.`;
 
+    const fixtureInstructions = useFixtures
+      ? framework === "cypress"
+        ? `Generate test fixtures and use them in the test spec instead of hard-coding test payloads. Access the data with cy.fixture('testData.json') and reference its values in test assertions and request bodies.`
+        : `Generate test fixtures and use them in the test spec instead of hard-coding test payloads. Import the data in the test spec with import testData from '../fixtures/testData.json' and reference its values in test assertions and request bodies.`
+      : "";
+
     const prompt = `Generate a clean, production-ready ${framework} end-to-end test script.
 
 Target URL: ${targetUrl}
@@ -38,10 +45,16 @@ QA Best Practices:
 - Prioritize resilient user-facing locators (getByRole, getByLabel, getByPlaceholder, or data-cy).
 - Use auto-waiting web-first assertions; avoid hard-coded sleeps or waitForTimeout.
 - Keep code concise without verbose comments.
+${fixtureInstructions}
 
 Return a JSON object with exactly these keys:
 - "scenarios": an array of 4 to 6 test cases covering the user story, positive and negative paths, and relevant edge cases. Each item must have "id" (TC-01, TC-02, etc.), "type" (exactly "Positive", "Negative", or "Edge Case"), "title", and "expectedResult".
 - "script": the complete generated ${framework} test script as a string, including the requested JavaScript markdown code block(s)${usePom ? " in the Page Object Model structure" : ""}.
+- "testData": ${
+      useFixtures
+        ? 'an object containing realistic "validInputs", "invalidInputs", "boundaryCases", and "mockApiResponses" tailored to the user story and target URL. Use arrays for each category, with meaningful JSON values that can be used by the generated test.'
+        : "null"
+    }.
 
 Do not include Markdown fences around the JSON response itself.`;
 
@@ -81,9 +94,22 @@ Do not include Markdown fences around the JSON response itself.`;
             throw new Error("Gemini returned an invalid test script or scenario list.");
           }
 
+          if (
+            useFixtures &&
+            (!parsed.testData ||
+              typeof parsed.testData !== "object" ||
+              Array.isArray(parsed.testData) ||
+              !["validInputs", "invalidInputs", "boundaryCases", "mockApiResponses"].every(
+                (key) => Array.isArray(parsed.testData[key]),
+              ))
+          ) {
+            throw new Error("Gemini returned invalid fixture data.");
+          }
+
           return Response.json({
             script: parsed.script,
             scenarios: parsed.scenarios,
+            testData: useFixtures ? parsed.testData : null,
           });
         }
       } catch (err) {
