@@ -240,6 +240,9 @@ export default function Home() {
   const [notice, setNotice] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedScript, setGeneratedScript] = useState("");
+  const [pageObjectCode, setPageObjectCode] = useState("");
+  const [specCode, setSpecCode] = useState("");
+  const [pomFile, setPomFile] = useState("spec");
   const [scenarios, setScenarios] = useState([]);
   const [generatedTestData, setGeneratedTestData] = useState(null);
   const [generatedOptions, setGeneratedOptions] = useState(null);
@@ -313,6 +316,10 @@ export default function Home() {
                   typeof item.timestamp === "string" &&
                   !Number.isNaN(Date.parse(item.timestamp)) &&
                   typeof item.script === "string" &&
+                  (item.pageObjectCode === undefined ||
+                    typeof item.pageObjectCode === "string") &&
+                  (item.specCode === undefined ||
+                    typeof item.specCode === "string") &&
                   ["playwright", "cypress"].includes(item.framework) &&
                   typeof item.targetUrl === "string" &&
                   typeof item.userStory === "string" &&
@@ -444,6 +451,9 @@ export default function Home() {
     }));
     setActivePreset(preset.id);
     setGeneratedScript("");
+    setPageObjectCode("");
+    setSpecCode("");
+    setPomFile("spec");
     setScenarios([]);
     setGeneratedTestData(null);
     setGeneratedOptions(null);
@@ -467,6 +477,9 @@ export default function Home() {
     setForm({ ...initialForm });
     setActivePreset("");
     setGeneratedScript("");
+    setPageObjectCode("");
+    setSpecCode("");
+    setPomFile("spec");
     setScenarios([]);
     setGeneratedTestData(null);
     setGeneratedOptions(null);
@@ -511,6 +524,9 @@ export default function Home() {
       domSnippet: session.domSnippet ?? "",
     });
     setGeneratedScript(toPlainScriptString(session.script));
+    setPageObjectCode(toPlainScriptString(session.pageObjectCode ?? ""));
+    setSpecCode(toPlainScriptString(session.specCode ?? ""));
+    setPomFile("spec");
     setScenarios(session.scenarios);
     setGeneratedTestData(session.testData ?? null);
     setGeneratedOptions({
@@ -563,6 +579,9 @@ export default function Home() {
     event.preventDefault();
     setIsGenerating(true);
     setGeneratedScript("");
+    setPageObjectCode("");
+    setSpecCode("");
+    setPomFile("spec");
     setScenarios([]);
     setGeneratedTestData(null);
     setGeneratedOptions(null);
@@ -618,6 +637,14 @@ export default function Home() {
         /^```(?:javascript|js)\s*\n([\s\S]*?)\n```$/i,
       );
       const script = form.usePom || !codeBlock ? rawScript : codeBlock[1];
+      const responsePageObjectCode =
+        typeof result.pageObjectCode === "string" ? result.pageObjectCode : "";
+      const responseSpecCode =
+        typeof result.specCode === "string"
+          ? result.specCode
+          : form.usePom
+            ? ""
+            : codeBlock?.[1] ?? rawScript;
       const session = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         timestamp: new Date().toISOString(),
@@ -629,10 +656,15 @@ export default function Home() {
         userStory: form.userStory,
         domSnippet: form.domSnippet,
         script,
+        pageObjectCode: responsePageObjectCode,
+        specCode: responseSpecCode,
         scenarios: result.scenarios,
         testData: form.useFixtures ? result.testData : null,
       };
       setGeneratedScript(script);
+      setPageObjectCode(responsePageObjectCode);
+      setSpecCode(responseSpecCode);
+      setPomFile("spec");
       setScenarios(result.scenarios);
       setGeneratedTestData(form.useFixtures ? result.testData : null);
       setGeneratedOptions({
@@ -655,7 +687,9 @@ export default function Home() {
 
   async function handleDownload() {
     const outputOptions = generatedOptions ?? form;
-    const codeBlocks = extractCodeBlocks(generatedScript);
+    const codeBlocks = outputOptions.usePom
+      ? []
+      : extractCodeBlocks(generatedScript);
 
     try {
       let blob;
@@ -675,13 +709,14 @@ export default function Home() {
           outputOptions.framework === "playwright"
             ? "tests/generated-test.spec.js"
             : "cypress/e2e/generated-test.cy.js";
-        if (outputOptions.usePom && codeBlocks.length >= 2) {
-          zip.file(pageObjectPath, codeBlocks[0]);
-          zip.file(specPath, codeBlocks[1]);
-        } else if (outputOptions.usePom) {
-          throw new Error(
-            "The generated POM suite is incomplete. It must include separate TargetPage and test spec code blocks. Please generate the suite again.",
-          );
+        if (outputOptions.usePom) {
+          if (!pageObjectCode.trim() || !specCode.trim()) {
+            throw new Error(
+              "The generated POM suite is incomplete. It must include TargetPage and test spec code. Please generate the suite again.",
+            );
+          }
+          zip.file(pageObjectPath, pageObjectCode);
+          zip.file(specPath, specCode);
         } else {
           if (!codeBlocks[0]) {
             throw new Error("The generated response did not contain JavaScript code.");
@@ -751,7 +786,13 @@ export default function Home() {
 
   async function handleCopy() {
     try {
-      await navigator.clipboard.writeText(generatedScript);
+      const codeToCopy =
+        outputOptions.usePom && pageObjectCode
+          ? pomFile === "pageObject"
+            ? pageObjectCode
+            : specCode
+          : generatedScript;
+      await navigator.clipboard.writeText(codeToCopy);
       setIsCopied(true);
       setCopyMessage("Copied to clipboard!");
       if (copyTimeoutRef.current) {
@@ -855,6 +896,16 @@ export default function Home() {
   }
 
   const outputOptions = generatedOptions ?? form;
+  const displayedCode =
+    outputOptions.usePom && pageObjectCode
+      ? pomFile === "pageObject"
+        ? pageObjectCode
+        : specCode
+      : generatedScript;
+  const generatedSpecFilename =
+    outputOptions.framework === "cypress"
+      ? "generated-test.cy.js"
+      : "generated-test.spec.js";
 
   return (
     <main className="dashboard">
@@ -1279,14 +1330,42 @@ export default function Home() {
           >
             {outputTab === "script" ? (
             <div className="code-window">
+              {outputOptions.usePom && pageObjectCode && (
+                <div className="pom-file-switcher" role="tablist" aria-label="POM files">
+                  <button
+                    className={`pom-file-tab${pomFile === "pageObject" ? " pom-file-tab-active" : ""}`}
+                    type="button"
+                    role="tab"
+                    aria-selected={pomFile === "pageObject"}
+                    onClick={() => {
+                      setPomFile("pageObject");
+                      setIsCopied(false);
+                    }}
+                  >
+                    TargetPage.js
+                  </button>
+                  <button
+                    className={`pom-file-tab${pomFile === "spec" ? " pom-file-tab-active" : ""}`}
+                    type="button"
+                    role="tab"
+                    aria-selected={pomFile === "spec"}
+                    onClick={() => {
+                      setPomFile("spec");
+                      setIsCopied(false);
+                    }}
+                  >
+                    {generatedSpecFilename}
+                  </button>
+                </div>
+              )}
               <div className="window-bar" aria-hidden="true">
                 <span />
                 <span />
                 <span />
                 <div className="window-filename">
-                  {(generatedOptions?.framework ?? form.framework) === "cypress"
-                    ? "generated-test.cy.js"
-                    : "generated-test.spec.js"}
+                  {outputOptions.usePom && pageObjectCode && pomFile === "pageObject"
+                    ? "TargetPage.js"
+                    : generatedSpecFilename}
                 </div>
               </div>
               {isGenerating ? (
@@ -1315,7 +1394,11 @@ export default function Home() {
                       className={`copy-button${isCopied ? " copy-button-copied" : ""}`}
                       type="button"
                       onClick={handleCopy}
-                      aria-label={isCopied ? "Test script copied" : "Copy generated test script to clipboard"}
+                      aria-label={
+                        isCopied
+                        ? "File copied"
+                        : `Copy ${outputOptions.usePom && pageObjectCode && pomFile === "pageObject" ? "TargetPage.js" : generatedSpecFilename} to clipboard`
+                      }
                     >
                       {isCopied ? (
                         <svg aria-hidden="true" viewBox="0 0 20 20" fill="none">
@@ -1370,7 +1453,9 @@ export default function Home() {
                           strokeLinejoin="round"
                         />
                       </svg>
-                      {outputOptions.usePom || outputOptions.useFixtures
+                      {outputOptions.usePom ||
+                      outputOptions.useFixtures ||
+                      outputOptions.includeCiWorkflow
                         ? "Download .zip Suite"
                         : outputOptions.framework === "playwright"
                           ? "Download .spec.js"
@@ -1380,7 +1465,7 @@ export default function Home() {
                   </div>
                   <pre className="generated-code" aria-label="Generated JavaScript">
                     <code>
-                      {generatedScript.split("\n").map((line, index) => (
+                      {displayedCode.split("\n").map((line, index) => (
                         <span className="code-line" key={index}>
                           <span className="code-line-number" aria-hidden="true">
                             {index + 1}

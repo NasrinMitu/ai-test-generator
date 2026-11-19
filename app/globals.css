@@ -2258,6 +2258,39 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.pom-file-switcher {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px 0;
+  background: #18181b;
+}
+
+.pom-file-tab {
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px 7px 0 0;
+  background: transparent;
+  color: #a1a1aa;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.pom-file-tab:hover {
+  color: #e4e4e7;
+}
+
+.pom-file-tab-active {
+  background: #27272a;
+  color: #f4f4f5;
+}
+
+.pom-file-tab:focus-visible {
+  outline: 2px solid #10b981;
+  outline-offset: 2px;
+}
+
 .preview-canvas {
   min-height: 350px;
 }

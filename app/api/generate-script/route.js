@@ -17,12 +17,6 @@ function isPlainObject(value) {
   return prototype === Object.prototype || prototype === null;
 }
 
-function getJavaScriptCodeBlocks(script) {
-  return [...script.matchAll(/```(?:javascript|js)\s*([\s\S]*?)```/gi)].map(
-    (match) => match[1].trim(),
-  );
-}
-
 export async function POST(request) {
   try {
     const {
@@ -58,15 +52,9 @@ export async function POST(request) {
 
     const pomInstructions = usePom
       ? framework === "cypress"
-        ? `POM OUTPUT IS REQUIRED. The script field MUST contain exactly TWO separate fenced JavaScript code blocks in this order:
-1. Code Block 1 for cypress/support/pages/TargetPage.js: define "export default class TargetPage" and encapsulate all DOM locators and page actions, including visit() and story-specific actions such as fillShippingDetails() or submitOrder().
-2. Code Block 2 for cypress/e2e/generated-test.cy.js: import TargetPage from '../support/pages/TargetPage', instantiate it, and call its methods from the Cypress tests.
-Keep all DOM selectors and interactions inside TargetPage methods. The it() blocks must contain zero raw cy.get(), cy.contains(), or other DOM selectors; they must only call Page Object methods and make assertions. Do not combine the files or omit either fenced block.`
-        : `POM OUTPUT IS REQUIRED. The script field MUST contain exactly TWO separate fenced JavaScript code blocks in this order:
-1. Code Block 1 for pages/TargetPage.js: define "export class TargetPage" and encapsulate all DOM locators and page actions, including visit() and story-specific actions such as fillShippingDetails() or submitOrder().
-2. Code Block 2 for tests/generated-test.spec.js: import { TargetPage } from '../pages/TargetPage', instantiate it, and call its methods from the Playwright tests.
-Keep all DOM selectors and interactions inside TargetPage methods. The test() blocks must contain zero raw page.locator() selectors; they must only call Page Object methods and make assertions. Do not combine the files or omit either fenced block.`
-      : `Return only a single, complete test script inside a JavaScript markdown code block.`;
+        ? `When usePom is true, return "pageObjectCode" and "specCode" as separate JSON string fields. "pageObjectCode" must contain only raw JavaScript (no Markdown fences) defining "export default class TargetPage" for cypress/support/pages/TargetPage.js and encapsulating all DOM locators and page actions. "specCode" must contain only raw JavaScript for cypress/e2e/generated-test.cy.js and import TargetPage from '../support/pages/TargetPage'. Call Page Object methods from the Cypress tests. Keep all DOM selectors and interactions inside TargetPage methods; it() blocks must contain zero raw cy.get(), cy.contains(), or other DOM selectors.`
+        : `When usePom is true, return "pageObjectCode" and "specCode" as separate JSON string fields. "pageObjectCode" must contain only raw JavaScript (no Markdown fences) defining "export class TargetPage" for pages/TargetPage.js and encapsulating all DOM locators and page actions. "specCode" must contain only raw JavaScript for tests/generated-test.spec.js and import { TargetPage } from '../pages/TargetPage'. Call Page Object methods from the Playwright tests. Keep all DOM selectors and interactions inside TargetPage methods; test() blocks must contain zero raw page.locator() selectors.`
+      : `When usePom is false, return "pageObjectCode" as an empty string and put the complete raw JavaScript test spec in "specCode", without Markdown fences.`;
 
     const fixtureInstructions = useFixtures
       ? framework === "cypress"
@@ -103,15 +91,29 @@ QA Best Practices:
 ${frameworkInstructions}
 - Extract locators strictly from the provided Page HTML / DOM Snippet. Do NOT invent or guess data-cy, data-testid, IDs, or labels that do not exist in the HTML.
 - Prioritize actual attributes present in the snippet in this order: 1) data-testid / data-cy, 2) accessible label / placeholder / aria-label / role text, 3) unique name or id attributes.
+- Scan the DOM snippet for required fields whose visible label or associated trigger text includes an asterisk (*), especially custom dropdowns rendered as buttons (for example, "City / District*") and required select elements. Never skip these fields. Add a Page Object helper that opens each custom dropdown using its actual accessible trigger (for example, Playwright page.getByRole('button', { name: /City \\/ District/i }) or Cypress cy.contains('button', /City \\/ District/i)), then selects a valid option using only options/text confirmed by the DOM snippet. Handle native select fields with the framework's native select interaction.
+- Every test() or it() block must finish with at least one meaningful assertion: use expect(...) in Playwright or a Cypress .should(...) assertion. This applies to positive submissions and negative validation cases; do not leave any test without an assertion.
+- Check the DOM snippet for duplicate data-testid values before using them. When multiple elements share a value (such as payment method cards), disambiguate by visible text using Playwright locator.filter({ hasText: '...' }) or Cypress cy.contains('[data-testid=\"...\"]', '...'), with text that identifies the intended element.
 - Always navigate to the complete Target URL:
 ${navigationInstruction}
 - Use auto-waiting web-first assertions; avoid hard-coded sleeps or waitForTimeout.
 - Keep code concise without verbose comments.
 ${fixtureInstructions}
+${pomInstructions}
 
 Return a JSON object with exactly these keys:
 - "scenarios": an array of 4 to 6 test cases covering the user story, positive and negative paths, and relevant edge cases. Each item must have "id" (TC-01, TC-02, etc.), "type" (exactly "Positive", "Negative", or "Edge Case"), "title", and "expectedResult".
-- "script": the complete generated ${framework} test script as a string, including the requested JavaScript markdown code block(s)${usePom ? ". When usePom is true, include TWO fenced code blocks: first the TargetPage class, second the test spec importing TargetPage." : ""}.
+- "pageObjectCode": ${
+      usePom
+        ? "raw JavaScript code for TargetPage, without Markdown fences."
+        : 'an empty string ("").'
+    }
+- "specCode": raw JavaScript code for the test spec, without Markdown fences.
+- "script": ${
+      usePom
+        ? 'an empty string (""); the server creates the combined preview from pageObjectCode and specCode.'
+        : "the complete generated test script as a string."
+    }.
 - "testData": ${
       useFixtures
         ? 'a nested JSON object (not a stringified JSON string) containing realistic "validInputs" and "invalidInputs" objects, a "boundaryCases" array, and a "mockApiResponses" object tailored to the user story and target URL.'
@@ -140,7 +142,6 @@ Do not include Markdown fences around the JSON response itself.`;
         if (response.text) {
           const parsed = JSON.parse(response.text);
           if (
-            typeof parsed.script !== "string" ||
             !Array.isArray(parsed.scenarios) ||
             parsed.scenarios.length < 4 ||
             parsed.scenarios.length > 6 ||
@@ -156,34 +157,25 @@ Do not include Markdown fences around the JSON response itself.`;
             throw new Error("Gemini returned an invalid test script or scenario list.");
           }
 
-          if (usePom) {
-            const codeBlocks = getJavaScriptCodeBlocks(parsed.script);
-            const [pageObject, spec] = codeBlocks;
-            const hasExpectedPageObject =
-              framework === "cypress"
-                ? /\bexport\s+default\s+class\s+TargetPage\b/.test(pageObject ?? "")
-                : /\bexport\s+class\s+TargetPage\b/.test(pageObject ?? "");
-            const hasExpectedImport =
-              framework === "cypress"
-                ? /import\s+TargetPage\s+from\s+['"]\.\.\/support\/pages\/TargetPage['"]/.test(
-                    spec ?? "",
-                  )
-                : /import\s+\{\s*TargetPage\s*\}\s+from\s+['"]\.\.\/pages\/TargetPage['"]/.test(
-                    spec ?? "",
-                  );
-
-            if (
-              codeBlocks.length !== 2 ||
-              !pageObject ||
-              !spec ||
-              !hasExpectedPageObject ||
-              !hasExpectedImport
-            ) {
-              throw new Error(
-                "Gemini returned an incomplete POM suite. The response must contain a TargetPage class block followed by a spec block that imports it.",
-              );
-            }
+          const pageObjectCode =
+            usePom && typeof parsed.pageObjectCode === "string"
+              ? parsed.pageObjectCode.trim()
+              : "";
+          const specCode =
+            typeof parsed.specCode === "string"
+              ? parsed.specCode.trim()
+              : !usePom && typeof parsed.script === "string"
+                ? parsed.script.trim()
+                : "";
+          if (!usePom && !specCode && typeof parsed.script !== "string") {
+            throw new Error("Gemini returned an invalid test script.");
           }
+          const script =
+            usePom && pageObjectCode
+              ? `\`\`\`javascript\n// TargetPage.js\n${pageObjectCode}\n\`\`\`\n\n\`\`\`javascript\n// ${framework === "cypress" ? "generated-test.cy.js" : "generated-test.spec.js"}\n${specCode}\n\`\`\``
+              : typeof parsed.script === "string"
+                ? parsed.script
+                : specCode;
 
           let testData = parsed.testData;
           if (useFixtures) {
@@ -221,7 +213,9 @@ Do not include Markdown fences around the JSON response itself.`;
           }
 
           return Response.json({
-            script: parsed.script,
+            script,
+            pageObjectCode,
+            specCode,
             scenarios: parsed.scenarios,
             testData: useFixtures ? testData : null,
           });
