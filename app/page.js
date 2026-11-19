@@ -2,7 +2,13 @@
 
 import Link from "next/link";
 import JSZip from "jszip";
-import { FiAlertTriangle } from "react-icons/fi";
+import {
+  FiAlertTriangle,
+  FiArrowRight,
+  FiClock,
+  FiTerminal,
+  FiX,
+} from "react-icons/fi";
 import { LuLogIn, LuSearch, LuShoppingCart } from "react-icons/lu";
 import { createPortal } from "react-dom";
 import { useEffect, useRef, useState } from "react";
@@ -65,26 +71,6 @@ const SAMPLE_PRESETS = [
   },
 ];
 
-function SparkleIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      fill="none"
-      className="brand-icon"
-    >
-      <path
-        d="m12 3 1.9 5.8L20 11l-6.1 2.2L12 19l-2-5.8L4 11l6-2.2L12 3Z"
-        fill="currentColor"
-      />
-      <path
-        d="m19 15 .9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15Z"
-        fill="currentColor"
-      />
-    </svg>
-  );
-}
-
 function CodeIcon() {
   return (
     <svg
@@ -124,14 +110,31 @@ function extractJavaScriptCodeBlocks(response) {
   return plainCode ? [plainCode] : [];
 }
 
+function getRelativeTime(timestamp) {
+  const elapsedSeconds = Math.round(
+    (Date.now() - new Date(timestamp).getTime()) / 1000,
+  );
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+
+  if (elapsedSeconds < 60) return formatter.format(-elapsedSeconds, "second");
+  if (elapsedSeconds < 3600) return formatter.format(-Math.round(elapsedSeconds / 60), "minute");
+  if (elapsedSeconds < 86400) return formatter.format(-Math.round(elapsedSeconds / 3600), "hour");
+  return formatter.format(-Math.round(elapsedSeconds / 86400), "day");
+}
+
 export default function Home() {
   const [form, setForm] = useState(initialForm);
   const [notice, setNotice] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedScript, setGeneratedScript] = useState("");
+  const [scenarios, setScenarios] = useState([]);
   const [generatedOptions, setGeneratedOptions] = useState(null);
   const [pendingPreset, setPendingPreset] = useState(null);
+  const [pendingHistorySession, setPendingHistorySession] = useState(null);
   const [pendingAction, setPendingAction] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [outputTab, setOutputTab] = useState("script");
   const [copyMessage, setCopyMessage] = useState("");
   const [isCopied, setIsCopied] = useState(false);
   const [activePreset, setActivePreset] = useState("");
@@ -142,6 +145,7 @@ export default function Home() {
   const commandCopyTimeoutRef = useRef(null);
   const presetModalRef = useRef(null);
   const presetCancelRef = useRef(null);
+  const historyDrawerRef = useRef(null);
 
   useEffect(
     () => () => {
@@ -180,23 +184,87 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!pendingAction) {
+    const timerId = window.setTimeout(() => {
+      try {
+        const savedHistory = JSON.parse(
+          window.localStorage.getItem("testcraft_history") || "[]",
+        );
+        if (Array.isArray(savedHistory)) {
+          setHistory(
+            savedHistory
+              .filter(
+                (item) =>
+                  item &&
+                  typeof item.id === "string" &&
+                  typeof item.timestamp === "string" &&
+                  !Number.isNaN(Date.parse(item.timestamp)) &&
+                  typeof item.script === "string" &&
+                  ["playwright", "cypress"].includes(item.framework) &&
+                  typeof item.targetUrl === "string" &&
+                  typeof item.userStory === "string" &&
+                  typeof item.usePom === "boolean" &&
+                  Array.isArray(item.scenarios) &&
+                  item.scenarios.every(
+                    (scenario) =>
+                      scenario &&
+                      typeof scenario.id === "string" &&
+                      typeof scenario.type === "string" &&
+                      typeof scenario.title === "string" &&
+                      typeof scenario.expectedResult === "string",
+                  ),
+              )
+              .slice(0, 10),
+          );
+        }
+      } catch (error) {
+        console.error("Could not load local generation history:", error);
+        setNotice("Could not load generation history from this browser.");
+      }
+    }, 0);
+
+    return () => window.clearTimeout(timerId);
+  }, []);
+
+  function persistHistory(nextHistory) {
+    setHistory(nextHistory);
+    try {
+      window.localStorage.setItem(
+        "testcraft_history",
+        JSON.stringify(nextHistory),
+      );
+    } catch (error) {
+      console.error("Could not save local generation history:", error);
+      setNotice("Could not save generation history in this browser.");
+    }
+  }
+
+  useEffect(() => {
+    if (!pendingAction && !isHistoryOpen) {
       return;
     }
 
     const previousFocus = document.activeElement;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    presetCancelRef.current?.focus();
+    if (pendingAction) {
+      presetCancelRef.current?.focus();
+    } else {
+      historyDrawerRef.current?.querySelector("button")?.focus();
+    }
 
     function handleModalKeyDown(event) {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && pendingAction) {
         setPendingAction(null);
         setPendingPreset(null);
+        setPendingHistorySession(null);
+        return;
+      }
+      if (event.key === "Escape" && isHistoryOpen) {
+        setIsHistoryOpen(false);
         return;
       }
 
-      if (event.key === "Tab") {
+      if (event.key === "Tab" && pendingAction) {
         const buttons =
           presetModalRef.current?.querySelectorAll("button:not(:disabled)");
         if (!buttons?.length) {
@@ -221,7 +289,7 @@ export default function Home() {
       document.removeEventListener("keydown", handleModalKeyDown);
       previousFocus?.focus?.();
     };
-  }, [pendingAction]);
+  }, [isHistoryOpen, pendingAction]);
 
   function handleChange(event) {
     const { name, type, value, checked } = event.target;
@@ -241,10 +309,12 @@ export default function Home() {
     }));
     setActivePreset(preset.id);
     setGeneratedScript("");
+    setScenarios([]);
     setGeneratedOptions(null);
     setCopyMessage("");
     setIsCopied(false);
     setNotice("");
+    setOutputTab("script");
   }
 
   function handlePreset(preset) {
@@ -261,10 +331,12 @@ export default function Home() {
     setForm({ ...initialForm });
     setActivePreset("");
     setGeneratedScript("");
+    setScenarios([]);
     setGeneratedOptions(null);
     setCopyMessage("");
     setIsCopied(false);
     setNotice("");
+    setOutputTab("script");
   }
 
   function handleReset() {
@@ -280,27 +352,80 @@ export default function Home() {
   function handleConfirmAction() {
     if (pendingAction === "reset") {
       clearTestSetup();
+    } else if (pendingAction === "restore" && pendingHistorySession) {
+      restoreHistorySession(pendingHistorySession);
     } else if (pendingPreset) {
       applyPreset(pendingPreset);
     }
 
     setPendingAction(null);
     setPendingPreset(null);
+    setPendingHistorySession(null);
+  }
+
+  function restoreHistorySession(session) {
+    setForm({
+      targetUrl: session.targetUrl,
+      framework: session.framework,
+      usePom: session.usePom,
+      userStory: session.userStory,
+    });
+    setGeneratedScript(session.script);
+    setScenarios(session.scenarios);
+    setGeneratedOptions({
+      framework: session.framework,
+      usePom: session.usePom,
+    });
+    setActivePreset("");
+    setCopyMessage("");
+    setIsCopied(false);
+    setOutputTab("script");
+    setNotice("");
+    setIsHistoryOpen(false);
+  }
+
+  function handleRestoreHistory(session) {
+    if (generatedScript) {
+      setPendingPreset(null);
+      setPendingHistorySession(session);
+      setPendingAction("restore");
+      return;
+    }
+
+    restoreHistorySession(session);
+  }
+
+  function handleClearHistory() {
+    persistHistory([]);
   }
 
   function handleCancelAction() {
     setPendingAction(null);
     setPendingPreset(null);
+    setPendingHistorySession(null);
+  }
+
+  function handleFormKeyDown(event) {
+    if (
+      event.key === "Enter" &&
+      (event.metaKey || event.ctrlKey) &&
+      !isGenerating
+    ) {
+      event.preventDefault();
+      event.currentTarget.requestSubmit();
+    }
   }
 
   async function handleSubmit(event) {
     event.preventDefault();
     setIsGenerating(true);
     setGeneratedScript("");
+    setScenarios([]);
     setGeneratedOptions(null);
     setCopyMessage("");
     setIsCopied(false);
     setNotice("");
+    setOutputTab("script");
 
     try {
       const response = await fetch("/api/generate-script", {
@@ -322,17 +447,28 @@ export default function Home() {
       if (typeof result.script !== "string" || !result.script.trim()) {
         throw new Error("The server returned an empty test script.");
       }
+      if (!Array.isArray(result.scenarios)) {
+        throw new Error("The server returned an invalid test scenario list.");
+      }
 
       const codeBlock = result.script.match(
         /^```(?:javascript|js)\s*\n([\s\S]*?)\n```$/i,
       );
-      setGeneratedScript(
-        form.usePom || !codeBlock ? result.script : codeBlock[1],
-      );
-      setGeneratedOptions({
+      const script = form.usePom || !codeBlock ? result.script : codeBlock[1];
+      const session = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        timestamp: new Date().toISOString(),
+        targetUrl: form.targetUrl,
         framework: form.framework,
         usePom: form.usePom,
-      });
+        userStory: form.userStory,
+        script,
+        scenarios: result.scenarios,
+      };
+      setGeneratedScript(script);
+      setScenarios(result.scenarios);
+      setGeneratedOptions({ framework: form.framework, usePom: form.usePom });
+      persistHistory([session, ...history].slice(0, 10));
     } catch (error) {
       setNotice(
         error instanceof Error
@@ -429,6 +565,34 @@ export default function Home() {
     }
   }
 
+  async function handleCopyScenarios() {
+    const markdown = [
+      "| ID | Type | Title | Expected Result |",
+      "| --- | --- | --- | --- |",
+      ...scenarios.map((scenario) => {
+        const cells = [
+          scenario.id,
+          scenario.type,
+          scenario.title,
+          scenario.expectedResult,
+        ].map((value) => String(value).replace(/\|/g, "\\|").replace(/\s*\n\s*/g, " "));
+        return `| ${cells.join(" | ")} |`;
+      }),
+    ].join("\n");
+
+    try {
+      await navigator.clipboard.writeText(markdown);
+      setCopyMessage("Scenarios copied as Markdown!");
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = setTimeout(() => setCopyMessage(""), 2500);
+    } catch (error) {
+      console.error("Could not copy test scenarios:", error);
+      setCopyMessage("Could not copy scenarios. Check browser permissions.");
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = setTimeout(() => setCopyMessage(""), 3500);
+    }
+  }
+
   async function handleCopyCommand(commandId, command) {
     try {
       await navigator.clipboard.writeText(command);
@@ -457,7 +621,28 @@ export default function Home() {
       <header className="topbar">
         <Link className="brand" href="/" aria-label="Testcraft home">
           <span className="brand-mark">
-            <SparkleIcon />
+            <svg
+              aria-hidden="true"
+              width="28"
+              height="28"
+              viewBox="0 0 28 28"
+              fill="none"
+            >
+              <path
+                d="M10 6 4 14l6 8M18 6l6 8-6 8"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path
+                d="m10.5 14.5 3 3 5.5-6"
+                stroke="#10B981"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
           </span>
           <span>testcraft</span>
         </Link>
@@ -465,6 +650,16 @@ export default function Home() {
           <span className="status-dot" />
           AI test workspace
         </div>
+        <button
+          className="history-trigger"
+          type="button"
+          onClick={() => setIsHistoryOpen(true)}
+          aria-label={`Open generation history, ${history.length} saved ${history.length === 1 ? "run" : "runs"}`}
+        >
+          <FiClock aria-hidden="true" />
+          <span>History</span>
+          <span className="history-count">{history.length}</span>
+        </button>
       </header>
 
       <section className="intro" aria-labelledby="page-title">
@@ -512,7 +707,11 @@ export default function Home() {
       </section>
 
       <section className="workspace" aria-label="Test generator workspace">
-        <form className="panel input-panel" onSubmit={handleSubmit}>
+        <form
+          className="panel input-panel"
+          onSubmit={handleSubmit}
+          onKeyDown={handleFormKeyDown}
+        >
           <div className="panel-heading">
             <div>
               <span className="step-label">STEP 01</span>
@@ -658,7 +857,7 @@ export default function Home() {
               Your test details stay private
             </p>
             <button
-              className="generate-button"
+              className="generate-button group"
               type="submit"
               disabled={isGenerating}
             >
@@ -669,9 +868,16 @@ export default function Home() {
                 </>
               ) : (
                 <>
-                  <SparkleIcon />
+                  <FiTerminal className="generate-terminal-icon" size={18} aria-hidden="true" />
                   Generate test script
-                  <span aria-hidden="true">→</span>
+                  <span className="shortcut-key" aria-hidden="true">
+                    ⌘↵
+                  </span>
+                  <FiArrowRight
+                    className="generate-arrow"
+                    size={16}
+                    aria-hidden="true"
+                  />
                 </>
               )}
             </button>
@@ -694,11 +900,41 @@ export default function Home() {
             <span className="language-badge">JS</span>
           </div>
 
+          <div className="output-tabs" role="tablist" aria-label="Generated output">
+            <button
+              className={`output-tab${outputTab === "script" ? " output-tab-active" : ""}`}
+              type="button"
+              role="tab"
+              id="output-tab-script"
+              aria-selected={outputTab === "script"}
+              aria-controls="output-panel-script"
+              onClick={() => setOutputTab("script")}
+            >
+              Test Script
+            </button>
+            <button
+              className={`output-tab${outputTab === "scenarios" ? " output-tab-active" : ""}`}
+              type="button"
+              role="tab"
+              id="output-tab-scenarios"
+              aria-selected={outputTab === "scenarios"}
+              aria-controls="output-panel-scenarios"
+              onClick={() => setOutputTab("scenarios")}
+            >
+              Test Scenarios
+              <span className="output-tab-count">{scenarios.length}</span>
+            </button>
+          </div>
+
           <div
             className="preview-canvas"
+            id={`output-panel-${outputTab}`}
+            role="tabpanel"
+            aria-labelledby={`output-tab-${outputTab}`}
             aria-busy={isGenerating}
             aria-live="polite"
           >
+            {outputTab === "script" ? (
             <div className="code-window">
               <div className="window-bar" aria-hidden="true">
                 <span />
@@ -827,6 +1063,50 @@ export default function Home() {
                 </div>
               )}
             </div>
+            ) : (
+              <section
+                className="scenarios-panel"
+              >
+                <div className="scenarios-header">
+                  <div>
+                    <h3>Generated test cases</h3>
+                    <p>Review the coverage before running your test suite.</p>
+                  </div>
+                  <button
+                    className="scenario-copy-button"
+                    type="button"
+                    onClick={handleCopyScenarios}
+                    disabled={scenarios.length === 0}
+                  >
+                    {copyMessage === "Scenarios copied as Markdown!"
+                      ? "Copied!"
+                      : "Copy as Markdown Table"}
+                  </button>
+                </div>
+                {scenarios.length > 0 ? (
+                  <div className="scenario-list">
+                    {scenarios.map((scenario) => (
+                      <article className="scenario-card" key={scenario.id}>
+                        <div className="scenario-card-heading">
+                          <span className="scenario-id">{scenario.id}</span>
+                          <span
+                            className={`scenario-type scenario-type-${scenario.type.toLowerCase().replace(" ", "-")}`}
+                          >
+                            {scenario.type}
+                          </span>
+                        </div>
+                        <h4>{scenario.title}</h4>
+                        <p>{scenario.expectedResult}</p>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="scenarios-empty">
+                    Generate a test script to see its structured scenarios here.
+                  </div>
+                )}
+              </section>
+            )}
           </div>
 
           <div className="preview-footer">
@@ -1106,7 +1386,9 @@ export default function Home() {
               >
                 {pendingAction === "reset"
                   ? "Resetting will clear your current form inputs and generated test script from the editor. Make sure you have copied or downloaded your code first."
-                  : "Loading this preset will overwrite your current form inputs and clear the generated test script in the editor. Make sure you have copied or downloaded your code first."}
+                  : pendingAction === "restore"
+                    ? "Restoring this history entry will replace your current form inputs, generated script, and scenarios. Make sure you have copied or downloaded your current code first."
+                    : "Loading this preset will overwrite your current form inputs and clear the generated test script in the editor. Make sure you have copied or downloaded your code first."}
               </p>
               <div
                 className="preset-modal-actions"
@@ -1152,10 +1434,114 @@ export default function Home() {
                 >
                   {pendingAction === "reset"
                     ? "Reset & Clear"
-                    : "Continue & Replace"}
+                    : pendingAction === "restore"
+                      ? "Restore Run"
+                      : "Continue & Replace"}
                 </button>
               </div>
             </div>
+          </div>,
+          document.body,
+        )}
+
+      {isHistoryOpen &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            className="history-overlay"
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 9998,
+              display: "flex",
+              justifyContent: "flex-end",
+              backgroundColor: "rgba(9, 9, 11, 0.45)",
+              backdropFilter: "blur(3px)",
+            }}
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) {
+                setIsHistoryOpen(false);
+              }
+            }}
+          >
+            <aside
+              className="history-drawer"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="history-drawer-title"
+              ref={historyDrawerRef}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                width: "min(100%, 460px)",
+                height: "100%",
+                backgroundColor: "#ffffff",
+                color: "#18181b",
+                boxShadow: "-20px 0 50px rgba(9, 9, 11, 0.18)",
+              }}
+            >
+              <header className="history-drawer-header">
+                <div>
+                  <span className="history-drawer-eyebrow">LOCAL WORKSPACE</span>
+                  <h2 id="history-drawer-title">Generation history</h2>
+                  <p>Your last 10 runs, saved only in this browser.</p>
+                </div>
+                <button
+                  className="history-close-button"
+                  type="button"
+                  aria-label="Close generation history"
+                  onClick={() => setIsHistoryOpen(false)}
+                >
+                  <FiX aria-hidden="true" />
+                </button>
+              </header>
+
+              <div className="history-drawer-actions">
+                <span>{history.length} saved {history.length === 1 ? "run" : "runs"}</span>
+                <button
+                  type="button"
+                  className="history-clear-button"
+                  onClick={handleClearHistory}
+                  disabled={history.length === 0}
+                >
+                  Clear All
+                </button>
+              </div>
+
+              <div className="history-list">
+                {history.length ? (
+                  history.map((session) => (
+                    <article className="history-entry" key={session.id}>
+                      <div className="history-entry-meta">
+                        <span className={`history-framework history-framework-${session.framework}`}>
+                          {session.framework === "playwright" ? "Playwright" : "Cypress"}
+                        </span>
+                        <time dateTime={session.timestamp}>
+                          {getRelativeTime(session.timestamp)}
+                        </time>
+                      </div>
+                      <p className="history-target" title={session.targetUrl}>
+                        {session.targetUrl}
+                      </p>
+                      <p className="history-story">{session.userStory}</p>
+                      <button
+                        type="button"
+                        className="history-restore-button"
+                        onClick={() => handleRestoreHistory(session)}
+                      >
+                        Restore this run
+                      </button>
+                    </article>
+                  ))
+                ) : (
+                  <div className="history-empty">
+                    <FiClock aria-hidden="true" />
+                    <h3>No generated runs yet</h3>
+                    <p>Your successful test generations will appear here.</p>
+                  </div>
+                )}
+              </div>
+            </aside>
           </div>,
           document.body,
         )}

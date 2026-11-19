@@ -40,7 +40,11 @@ QA Best Practices:
 - Use auto-waiting web-first assertions; avoid hard-coded sleeps or waitForTimeout.
 - Keep code concise without verbose comments.
 
-${pomInstructions}`;
+Return a JSON object with exactly these keys:
+- "scenarios": an array of 4 to 6 test cases covering the user story, positive and negative paths, and relevant edge cases. Each item must have "id" (TC-01, TC-02, etc.), "type" (exactly "Positive", "Negative", or "Edge Case"), "title", and "expectedResult".
+- "script": the complete generated ${framework} test script as a string, including the requested JavaScript markdown code block(s)${usePom ? " in the Page Object Model structure" : ""}.
+
+Do not include Markdown fences around the JSON response itself.`;
 
     let lastError = null;
 
@@ -51,6 +55,7 @@ ${pomInstructions}`;
           contents: prompt,
           config: {
             temperature: 0.2,
+            responseMimeType: "application/json",
             // Gemini 3.x models use thinkingLevel instead of thinkingBudget: 0
             thinkingConfig: {
               thinkingLevel: usePom ? "LOW" : "MINIMAL",
@@ -59,7 +64,28 @@ ${pomInstructions}`;
         });
 
         if (response.text) {
-          return Response.json({ script: response.text });
+          const parsed = JSON.parse(response.text);
+          if (
+            typeof parsed.script !== "string" ||
+            !Array.isArray(parsed.scenarios) ||
+            parsed.scenarios.length < 4 ||
+            parsed.scenarios.length > 6 ||
+            parsed.scenarios.some(
+              (scenario) =>
+                !scenario ||
+                typeof scenario.id !== "string" ||
+                !["Positive", "Negative", "Edge Case"].includes(scenario.type) ||
+                typeof scenario.title !== "string" ||
+                typeof scenario.expectedResult !== "string",
+            )
+          ) {
+            throw new Error("Gemini returned an invalid test script or scenario list.");
+          }
+
+          return Response.json({
+            script: parsed.script,
+            scenarios: parsed.scenarios,
+          });
         }
       } catch (err) {
         lastError = err;
